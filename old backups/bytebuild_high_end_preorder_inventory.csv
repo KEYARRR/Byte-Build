@@ -1,0 +1,39 @@
+id,name,brand,category,sku_code,price,stock_status
+1,Gigabyte GeForce RTX 5090 AORUS Master,Gigabyte,Video Cards,PO-BB-GPU-GIG-0232,229650,Pre-Order
+2,MSI GeForce RTX 5090 Gaming Trio 32GB,MSI,Video Cards,PO-BB-GPU-MSI-0433,197340,Pre-Order
+3,MSI GeForce RTX 5090 Ventus 3x 32GB,MSI,Video Cards,PO-BB-GPU-MSI-0434,177472,Pre-Order
+4,MSI GeForce RTX 5090 Suprim,MSI,Video Cards,PO-BB-GPU-MSI-0431,168390,Pre-Order
+5,MSI GeForce RTX 5090,MSI,Video Cards,PO-BB-GPU-MSI-0432,164290,Pre-Order
+6,ASUS GeForce RTX 5080 ROG Strix,ASUS,Video Cards,PO-BB-GPU-ASU-0089,120550,Pre-Order
+7,Gigabyte GeForce RTX 5080 Gaming OC,Gigabyte,Video Cards,PO-BB-GPU-GIG-0230,105250,Pre-Order
+8,ASUS GeForce RTX 5080 16GB,ASUS,Video Cards,PO-BB-GPU-ASU-0075,99420,Pre-Order
+9,MSI GeForce RTX 5080 Aero 16GB,MSI,Video Cards,PO-BB-GPU-MSI-0229,97320,Pre-Order
+10,Gigabyte GeForce RTX 5080 Windforce OC,Gigabyte,Video Cards,PO-BB-GPU-GIG-0231,89870,Pre-Order
+11,MSI GeForce RTX 5080 Ventus 3x 16GB,MSI,Video Cards,PO-BB-GPU-MSI-0348,87520,Pre-Order
+12,MSI GeForce RTX 5080 Ventus 3x White 16GB,MSI,Video Cards,PO-BB-GPU-MSI-0430,87360,Pre-Order
+13,AMD Ryzen 9 9950X3D2,AMD,Processors,PO-BB-CPU-AMD-0038,60995,Pre-Order
+14,Kingston NV3 4TB,Kingston,Storage,PO-BB-STO-KIN-0319,58150,Pre-Order
+15,Corsair Dominator Platinum RGB 64GB DDR5 6000MHz CL30,Corsair,Memory,PO-BB-RAM-COR-0116,57850,Pre-Order
+16,Samsung SSD 4TB,Samsung,Storage,PO-BB-STO-SAM-0462,49550,Pre-Order
+17,Samsung 990 Pro 4TB,Samsung,Storage,PO-BB-STO-SAM-0464,46890,Pre-Order
+18,ASUS ROG Maximus Z790 Hero Eva-02 1700 DDR5,ASUS,Motherboards,PO-BB-MOB-ASU-0784,46740,Pre-Order
+19,ASUS ROG Maximus Z890 Hero 4 D5 ATX Wifi7 Lga1851,ASUS,Motherboards,PO-BB-MOB-ASU-0083,46190,Pre-Order
+20,AMD Ryzen 9 9950X3D,AMD,Processors,PO-BB-CPU-AMD-0037,45415,Pre-Order
+21,ASUS ROG Maximus Z890 Apex 4 D5 ATX Wifi7 Lga1851,ASUS,Motherboards,PO-BB-MOB-ASU-0082,44720,Pre-Order
+22,Western Digital Black 4TB,Western Digital,Storage,PO-BB-STO-WES-0498,43560,Pre-Order
+23,ASUS ROG Crosshair X870E Hero ATX,ASUS,Motherboards,PO-BB-MOB-ASU-1110,42200,Pre-Order
+24,AMD Ryzen 9 3950X,AMD,Processors,PO-BB-CPU-AMD-0556,41995,Pre-Order
+25,Gigabyte Z890 Master 4 D5 ATX Wifi7 Lga1851,Gigabyte,Motherboards,PO-BB-MOB-GIG-0264,41295,Pre-Order
+26,AMD Ryzen 9 7950X3D,AMD,Processors,PO-BB-CPU-AMD-0034,41115,Pre-Order
+27,MSI X570 Godlike DDR4,MSI,Motherboards,PO-BB-MOB-MSI-0898,41000,Pre-Order
+28,AMD Ryzen 9 9900X3D,AMD,Processors,PO-BB-CPU-AMD-0036,39203,Pre-Order
+29,ASUS ROG Maximus Z790 Hero 1700 DDR5,ASUS,Motherboards,PO-BB-MOB-ASU-0820,38959,Pre-Order
+30,ASUS ROG Crosshair X870E Hero DDR5 Wifi7,ASUS,Motherboards,PO-BB-MOB-ASU-0081,38640,Pre-Order
+31,Intel Core i9-13900K,Intel,Processors,PO-BB-CPU-INT-0571,37800,Pre-Order
+32,AMD Ryzen 9 9950X,AMD,Processors,PO-BB-CPU-AMD-0562,36941,Pre-Order
+33,Intel Core i9-12900KS,Intel,Processors,PO-BB-CPU-INT-0575,36065,Pre-Order
+34,Samsung 990 Pro 2TB,Samsung,Storage,PO-BB-STO-SAM-0465,32550,Pre-Order
+35,G.Skill Trident Z5 RGB 32GB Single Stick DDR5 6000MHz CL36,G.Skill,Memory,PO-BB-RAM-G.S-0143,28270,Pre-Order
+36,G.Skill Ripjaws M5 Neo 32GB DDR5 6000MHz CL36,G.Skill,Memory,PO-BB-RAM-G.S-0131,27750,Pre-Order
+37,TeamGroup T-Force Delta 64GB 2X32GB DDR4 3600MHz,TeamGroup,Memory,PO-BB-RAM-TEA-1296,26000,Pre-Order
+38,Corsair Vengeance 32GB DDR4 3200MHz,Corsair,Memory,PO-BB-RAM-COR-1068,25252,Pre-Order

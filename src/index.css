@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-width: 100%;
+  min-height: 100vh;
+}
+
+body {
+  background: #f5f6f8;
+}
+
+#root {
+  text-align: initial;
+  border: none;
+  display: block;
+}
+
+* {
+  box-sizing: border-box;
+}
