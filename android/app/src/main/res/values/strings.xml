@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ByteBuild</string>
+    <string name="title_activity_main">ByteBuild</string>
+    <string name="package_name">com.bytebuild.app</string>
+    <string name="custom_url_scheme">com.bytebuild.app</string>
+</resources>
