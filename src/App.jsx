@@ -17,6 +17,11 @@ const CATEGORIES = [
   'Cases',
 ];
 
+const ADMIN_EMAILS = [
+  'admin@bytebuild.ph',
+  'kenneth@bytebuild.ph',
+];
+
 const INITIAL_BUILD = {
   Processors: null,
   Motherboards: null,
@@ -29,6 +34,17 @@ const INITIAL_BUILD = {
 };
 
 const INITIAL_EXISTING_PC = { ...INITIAL_BUILD };
+
+const DEFAULT_DSS_RULES = {
+  psuBufferWatts: 120,
+  minRecommendedRamGB: 16,
+  minStorageCapacityGB: 500,
+  maxAllowedTierGap: 2,
+  gamingGpuWeight: 36,
+  gamingCpuWeight: 21,
+  creatorGpuWeight: 29,
+  creatorCpuWeight: 27,
+};
 
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
 
@@ -44,12 +60,9 @@ const getCategoryLabel = (category) => {
   return category;
 };
 
-
 const detectCpuSocket = (part) => {
   if (part?.socket) return part.socket;
-
   const name = String(part?.name || '').toUpperCase();
-
   if (
     name.includes('LGA1700') ||
     name.includes('12TH') ||
@@ -70,7 +83,6 @@ const detectCpuSocket = (part) => {
   ) {
     return 'LGA1700';
   }
-
   if (
     name.includes('AM5') ||
     name.includes('7500') ||
@@ -92,7 +104,6 @@ const detectCpuSocket = (part) => {
   ) {
     return 'AM5';
   }
-
   if (
     name.includes('AM4') ||
     name.includes('ATHLON') ||
@@ -112,15 +123,12 @@ const detectCpuSocket = (part) => {
   ) {
     return 'AM4';
   }
-
   return '';
 };
 
 const detectMotherboardSocket = (part) => {
   if (part?.socket) return part.socket;
-
   const name = String(part?.name || '').toUpperCase();
-
   if (
     name.includes('A620') ||
     name.includes('B650') ||
@@ -130,7 +138,6 @@ const detectMotherboardSocket = (part) => {
   ) {
     return 'AM5';
   }
-
   if (
     name.includes('A320') ||
     name.includes('A520') ||
@@ -143,7 +150,6 @@ const detectMotherboardSocket = (part) => {
   ) {
     return 'AM4';
   }
-
   if (
     name.includes('H610') ||
     name.includes('B660') ||
@@ -154,25 +160,29 @@ const detectMotherboardSocket = (part) => {
   ) {
     return 'LGA1700';
   }
-
   return '';
+};
+
+const detectPartFormFactor = (part) => {
+  const raw = `${part?.form_factor || ''} ${part?.name || ''} ${part?.specs || ''}`.toUpperCase();
+  if (raw.includes('MINI-ITX') || raw.includes('ITX')) return 'Mini-ITX';
+  if (raw.includes('MICRO-ATX') || raw.includes('M-ATX') || raw.includes('MATX')) return 'Micro-ATX';
+  if (raw.includes('E-ATX') || raw.includes('EATX')) return 'E-ATX';
+  if (raw.includes('ATX')) return 'ATX';
+  return 'Standard';
 };
 
 const getCpuProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
   const tdpFromDb = Number(part?.tdp || 0);
   const score = Number(part?.hardware_score || 0);
-
-  if (!name) return { tier: 0, label: 'No CPU selected', watts: 0, coolerNeed: 0 };
-
+  if (!name) return { tier: 0, label: 'No CPU Selected', watts: 0, coolerNeed: 0 };
   if (name.includes('ATHLON') || name.includes('200GE') || name.includes('3000G')) {
-    return { tier: 1, label: 'Entry-Level APU', watts: tdpFromDb || 35, coolerNeed: 1 };
+    return { tier: 1, label: 'Entry APU', watts: tdpFromDb || 35, coolerNeed: 1 };
   }
-
   if (name.includes('2200G') || name.includes('3200G') || name.includes('3400G')) {
-    return { tier: 2, label: 'Entry-Level APU', watts: tdpFromDb || 65, coolerNeed: 1 };
+    return { tier: 2, label: 'Entry APU', watts: tdpFromDb || 65, coolerNeed: 1 };
   }
-
   if (
     name.includes('4500') ||
     name.includes('5500') ||
@@ -183,7 +193,6 @@ const getCpuProfile = (part) => {
   ) {
     return { tier: 3, label: 'Budget Gaming CPU', watts: tdpFromDb || 65, coolerNeed: 1 };
   }
-
   if (
     name.includes('5600') ||
     name.includes('5700X') ||
@@ -195,7 +204,6 @@ const getCpuProfile = (part) => {
   ) {
     return { tier: 4, label: 'Mainstream Gaming CPU', watts: tdpFromDb || 90, coolerNeed: 2 };
   }
-
   if (
     name.includes('5800X') ||
     name.includes('7700') ||
@@ -206,9 +214,8 @@ const getCpuProfile = (part) => {
     name.includes('13700') ||
     name.includes('14700')
   ) {
-    return { tier: 5, label: 'High-End CPU', watts: tdpFromDb || 140, coolerNeed: 3 };
+    return { tier: 5, label: 'Performance CPU', watts: tdpFromDb || 140, coolerNeed: 3 };
   }
-
   if (
     name.includes('7900') ||
     name.includes('7950') ||
@@ -218,12 +225,11 @@ const getCpuProfile = (part) => {
     name.includes('13900') ||
     name.includes('14900')
   ) {
-    return { tier: 6, label: 'Enthusiast CPU', watts: tdpFromDb || 180, coolerNeed: 4 };
+    return { tier: 6, label: 'Enthusiast Workstation CPU', watts: tdpFromDb || 180, coolerNeed: 4 };
   }
-
   return {
     tier: score >= 85 ? 5 : score >= 75 ? 4 : score >= 60 ? 3 : 2,
-    label: 'General CPU',
+    label: 'Standard Processor',
     watts: tdpFromDb || 80,
     coolerNeed: score >= 80 ? 3 : 2,
   };
@@ -233,26 +239,21 @@ const getGpuProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
   const wattsFromDb = Number(part?.wattage || part?.tdp || 0);
   const score = Number(part?.hardware_score || 0);
-
-  if (!name) return { tier: 0, label: 'No GPU selected', watts: 0 };
-
+  if (!name) return { tier: 0, label: 'No GPU Selected', watts: 0 };
   if (name.includes('5090') || name.includes('4090') || name.includes('7900 XTX')) {
-    return { tier: 6, label: 'Extreme GPU', watts: wattsFromDb || 450 };
+    return { tier: 6, label: 'Extreme 4K GPU', watts: wattsFromDb || 450 };
   }
-
   if (name.includes('5080') || name.includes('4080') || name.includes('7900 XT')) {
-    return { tier: 5, label: 'Enthusiast GPU', watts: wattsFromDb || 350 };
+    return { tier: 5, label: 'High-End 1440p/4K GPU', watts: wattsFromDb || 350 };
   }
-
   if (
     name.includes('5070') ||
     name.includes('4070') ||
     name.includes('7800 XT') ||
     name.includes('B580')
   ) {
-    return { tier: 4, label: 'High Mid-Range GPU', watts: wattsFromDb || 250 };
+    return { tier: 4, label: 'Upper Mid-Range GPU', watts: wattsFromDb || 250 };
   }
-
   if (
     name.includes('5060') ||
     name.includes('4060') ||
@@ -261,9 +262,8 @@ const getGpuProfile = (part) => {
     name.includes('ARC A750') ||
     name.includes('2070 SUPER')
   ) {
-    return { tier: 3, label: 'Mid-Range GPU', watts: wattsFromDb || 180 };
+    return { tier: 3, label: '1080p Mainstream GPU', watts: wattsFromDb || 180 };
   }
-
   if (
     name.includes('1650') ||
     name.includes('3050') ||
@@ -273,22 +273,55 @@ const getGpuProfile = (part) => {
   ) {
     return { tier: 2, label: 'Entry-Level GPU', watts: wattsFromDb || 100 };
   }
-
   return {
     tier: score >= 85 ? 5 : score >= 75 ? 4 : score >= 60 ? 3 : 2,
-    label: 'General GPU',
+    label: 'Dedicated Graphics',
     watts: wattsFromDb || 180,
   };
 };
 
-const getRamProfile = (part) => {
+const getMotherboardProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
-  const capacityText = part?.capacity || '';
-  const gbMatch = `${name} ${capacityText}`.match(/(\d+)\s*GB/);
-  const capacity = gbMatch ? Number(gbMatch[1]) : 0;
+  const socket = detectMotherboardSocket(part);
+  const isITX = name.includes('ITX') || name.includes('MINI-ITX');
+  const isMATX = name.includes('M-ATX') || name.includes('MATX') || name.includes('M ');
+  const formFactor = isITX ? 'Mini-ITX' : isMATX ? 'Micro-ATX' : 'ATX';
+  const dimmSlots = isITX ? 2 : (name.includes('PRO-VDH') || name.includes('M-K') || name.includes('PRIME A')) && isMATX ? 2 : 4;
+  let tier = 'Entry';
+  if (name.includes('Z690') || name.includes('Z790') || name.includes('X670') || name.includes('X870')) {
+    tier = 'Enthusiast';
+  } else if (name.includes('B550') || name.includes('B650') || name.includes('B760') || name.includes('B850') || name.includes('B660')) {
+    tier = 'Mainstream';
+  }
+  const memoryType =
+    part?.memory_type ||
+    (name.includes('DDR5') || socket === 'AM5' ? 'DDR5' : 'DDR4');
+  return { socket, formFactor, dimmSlots, tier, memoryType };
+};
 
+const getRamProfile = (part, userCount = null) => {
+  const name = String(part?.name || '').toUpperCase();
+  const capacityText = String(part?.capacity || '').toUpperCase();
+  const dualPackMatch = `${name} ${capacityText}`.match(/(\d+)\s*X\s*(\d+)\s*GB/);
+  const singleMatch = `${name} ${capacityText}`.match(/(\d+)\s*GB/);
+  let perStickCapacity = 0;
+  let packMultiplier = 1;
+  if (dualPackMatch) {
+    packMultiplier = Number(dualPackMatch[1]);
+    perStickCapacity = Number(dualPackMatch[2]);
+  } else if (singleMatch) {
+    perStickCapacity = Number(singleMatch[1]);
+  }
+  const finalStickCount = userCount !== null ? userCount : packMultiplier;
+  const totalCapacity = perStickCapacity * finalStickCount;
   return {
-    capacity,
+    perStickCapacity,
+    stickCount: finalStickCount,
+    hasChosenSticks: userCount !== null,
+    totalCapacity,
+    isSingleChannel: finalStickCount === 1,
+    isDualChannel: finalStickCount === 2,
+    isQuadChannelOrPopulated: finalStickCount >= 4,
     type:
       part?.memory_type ||
       (name.includes('DDR5') ? 'DDR5' : name.includes('DDR4') ? 'DDR4' : 'Unknown'),
@@ -297,23 +330,22 @@ const getRamProfile = (part) => {
 
 const getStorageProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
-  const capacity = String(part?.capacity || '').toUpperCase();
-
+  const capacityText = String(part?.capacity || '').toUpperCase();
+  const isNvmeGen4 = name.includes('GEN4') || name.includes('PCIE 4') || name.includes('SN770') || name.includes('SN850') || name.includes('980 PRO') || name.includes('990 PRO') || name.includes('KC3000');
+  const isNvmeGen3 = name.includes('GEN3') || name.includes('SN570') || name.includes('SN580') || name.includes('970 EVO') || name.includes('MP33') || name.includes('P3');
+  const isSataSsd = name.includes('SATA') || (name.includes('SSD') && !name.includes('NVME') && !name.includes('M.2'));
+  const isHdd = name.includes('HDD') || name.includes('BARRACUDA') || (name.includes('BLUE') && name.includes('RPM'));
+  let driveClass = isNvmeGen4 ? 'Gen4 NVMe' : isNvmeGen3 ? 'Gen3 NVMe' : isSataSsd ? 'SATA SSD' : isHdd ? 'Mechanical HDD' : 'Standard SSD';
+  const gbMatch = `${name} ${capacityText}`.match(/(\d+)\s*GB/);
+  const tbMatch = `${name} ${capacityText}`.match(/(\d+)\s*TB/);
+  const capacityGB = tbMatch ? Number(tbMatch[1]) * 1000 : gbMatch ? Number(gbMatch[1]) : 500;
   return {
-    isSmall:
-      name.includes('120GB') ||
-      name.includes('128GB') ||
-      name.includes('240GB') ||
-      name.includes('256GB') ||
-      capacity.includes('128GB') ||
-      capacity.includes('256GB'),
-    interfaceType:
-      part?.interface_type ||
-      (name.includes('NVME') || name.includes('M.2')
-        ? 'NVMe / M.2'
-        : name.includes('SSD')
-        ? 'SATA SSD'
-        : 'Unknown'),
+    capacityGB,
+    driveClass,
+    isHdd,
+    isSataSsd,
+    isSlowPrimary: isHdd || isSataSsd,
+    isTightCapacity: capacityGB < 500,
   };
 };
 
@@ -321,25 +353,21 @@ const getPsuProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
   const wattMatch = name.match(/(\d{3,4})\s*W/);
   const watts = Number(part?.wattage || 0) || (wattMatch ? Number(wattMatch[1]) : 0);
-
   const rating = name.includes('GOLD')
-    ? 'Gold'
+    ? '80+ Gold'
     : name.includes('BRONZE')
-    ? 'Bronze'
+    ? '80+ Bronze'
     : name.includes('WHITE')
-    ? 'White'
-    : 'Unknown';
-
-  return { watts, rating };
+    ? '80+ White'
+    : 'Unrated / Generic';
+  return { watts, rating, isGeneric: rating === 'Unrated / Generic' };
 };
 
 const getCoolerProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
-
-  if (!name) return { tier: 0, label: 'No cooler selected' };
-  if (name.includes('360')) return { tier: 4, label: '360mm Liquid Cooler' };
-  if (name.includes('240')) return { tier: 3, label: '240mm Liquid Cooler' };
-
+  if (!name) return { tier: 0, label: 'Stock Cooler' };
+  if (name.includes('360')) return { tier: 4, label: '360mm AIO Liquid Cooler' };
+  if (name.includes('240')) return { tier: 3, label: '240mm AIO Liquid Cooler' };
   if (
     name.includes('TOWER') ||
     name.includes('AK400') ||
@@ -349,448 +377,179 @@ const getCoolerProfile = (part) => {
   ) {
     return { tier: 2, label: 'Tower Air Cooler' };
   }
-
   if (name.includes('STOCK') || name.includes('WRAITH')) {
     return { tier: 1, label: 'Stock Cooler' };
   }
-
-  return { tier: 2, label: 'Basic Cooler' };
+  return { tier: 2, label: 'Standard Air Cooler' };
 };
 
 const getCaseProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
-
   return {
     airflow:
       name.includes('MESH') ||
       name.includes('AIR') ||
       name.includes('FLOW') ||
       name.includes('FAN'),
-    formFactor: part?.form_factor || 'mATX / ATX support depends on model',
+    formFactor: part?.form_factor || 'mATX / ATX',
   };
 };
-
-
-
 
 function ByteBuildGlobalStyles() {
   return (
     <style>{`
       :root {
         color-scheme: dark;
-        background: #020817;
+        background: #0b0f19;
       }
-
       html,
       body,
       #root {
         min-height: 100%;
         margin: 0;
-        background: #020817 !important;
-        color: #ffffff;
-        scroll-behavior: smooth;
+        background: #0b0f19 !important;
+        color: #f1f5f9;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       }
-
-      body {
-        overflow-x: hidden;
-      }
-
       * {
         box-sizing: border-box;
       }
-
       input,
       select,
       textarea {
         color-scheme: dark;
       }
-
-      option {
-        background: #020817;
-        color: #ffffff;
-      }
-
-      ::selection {
-        background: rgba(22, 199, 232, 0.35);
-        color: #ffffff;
-      }
-
       ::-webkit-scrollbar {
-        width: 10px;
-        height: 10px;
+        width: 6px;
+        height: 6px;
       }
-
       ::-webkit-scrollbar-track {
-        background: #020817;
+        background: #0b0f19;
       }
-
       ::-webkit-scrollbar-thumb {
-        background: rgba(22, 199, 232, 0.45);
-        border-radius: 999px;
+        background: #2563eb;
+        border-radius: 4px;
       }
-
-      ::-webkit-scrollbar-thumb:hover {
-        background: rgba(22, 199, 232, 0.8);
-      }
-
-      @keyframes byteFadeUp {
-        from {
-          opacity: 0;
-          transform: translateY(18px);
+      @keyframes appViewTransition {
+        0% {
+          opacity: 0.94;
+          transform: translateY(6px);
         }
-        to {
+        100% {
           opacity: 1;
           transform: translateY(0);
         }
       }
-
-      @keyframes byteSlideIn {
-        from {
-          opacity: 0;
-          transform: translateX(18px);
+      .app-view-container {
+        animation: appViewTransition 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        will-change: transform, opacity;
+      }
+      @media print {
+        @page {
+          size: A4 portrait;
+          margin: 12mm 15mm;
         }
-        to {
-          opacity: 1;
-          transform: translateX(0);
+        body, html, #root {
+          background: #ffffff !important;
+          color: #0f172a !important;
+          font-size: 9pt !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+        header,
+        footer,
+        nav,
+        aside > div:last-child,
+        button,
+        input,
+        select,
+        .print\\:hidden,
+        main > section > div:first-child,
+        .mobile-bottom-bar {
+          display: none !important;
+        }
+        aside {
+          width: 100% !important;
+          position: static !important;
+          display: block !important;
+        }
+        #printable-quotation {
+          display: block !important;
+          position: static !important;
+          width: 100% !important;
+          background: #ffffff !important;
+          color: #0f172a !important;
+          border: none !important;
+          box-shadow: none !important;
+          padding: 0 !important;
+          margin: 0 !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+        #printable-quotation .print-table-wrapper {
+          display: table !important;
+          width: 100% !important;
+          border-collapse: collapse !important;
+          border-spacing: 0 !important;
+        }
+        #printable-quotation .print-table-row {
+          display: table-row !important;
+          border: none !important;
+          background: transparent !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+        #printable-quotation .print-table-row:nth-child(even) {
+          background-color: #f8fafc !important;
+        }
+        #printable-quotation .print-cell-name {
+          display: table-cell !important;
+          padding: 6px 8px !important;
+          border-bottom: 1px solid #e2e8f0 !important;
+          vertical-align: middle !important;
+          width: 70% !important;
+        }
+        #printable-quotation .print-cell-price {
+          display: table-cell !important;
+          padding: 6px 8px !important;
+          border-bottom: 1px solid #e2e8f0 !important;
+          vertical-align: middle !important;
+          text-align: right !important;
+          width: 30% !important;
+        }
+        #printable-quotation .print-price {
+          font-size: 9.5pt !important;
+          font-weight: 700 !important;
+          font-family: monospace !important;
+          color: #0f172a !important;
+          display: inline-block !important;
+          min-width: 80px !important;
+          text-align: right !important;
+        }
+        #printable-quotation p,
+        #printable-quotation span {
+          color: #1e293b !important;
+        }
+        #printable-quotation .print-summary-box {
+          background: #ffffff !important;
+          border: 1px solid #cbd5e1 !important;
+          color: #0f172a !important;
+          margin-top: 14px !important;
+          padding: 10px 14px !important;
+          border-radius: 6px !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+        }
+        #printable-quotation .print-total {
+          color: #1e3a8a !important;
+          font-size: 15pt !important;
+          font-weight: 900 !important;
+          font-family: monospace !important;
         }
       }
-
-      .bb-page {
-        animation: byteFadeUp 420ms ease both;
-      }
-
-      .bb-card {
-        transition:
-          transform 220ms ease,
-          border-color 220ms ease,
-          box-shadow 220ms ease,
-          background 220ms ease;
-      }
-
-      .bb-card:hover {
-        transform: translateY(-4px);
-        border-color: rgba(83, 228, 255, 0.55);
-        box-shadow: 0 22px 60px rgba(0, 0, 0, 0.48), 0 0 35px rgba(22, 199, 232, 0.12);
-      }
-
-      .bb-tab {
-        transition:
-          transform 180ms ease,
-          background 180ms ease,
-          border-color 180ms ease,
-          color 180ms ease;
-      }
-
-      .bb-tab:hover {
-        transform: translateY(-2px);
-      }
-
-      .bb-hero-slide {
-        animation: byteSlideIn 520ms ease both;
-      }
-
-      .bb-category-title {
-        display: block;
-        width: 100%;
-        max-width: 100%;
-        color: #ffffff !important;
-        opacity: 1 !important;
-        visibility: visible !important;
-        overflow-wrap: break-word;
-        word-break: normal;
-        line-height: 1.15;
-      }
-
-      .bb-category-subtitle {
-        color: #9fb7d7 !important;
-        opacity: 1 !important;
-        visibility: visible !important;
-      }
-
-      .bb-category-icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 44px;
-        height: 44px;
-        min-width: 44px;
-        border-radius: 14px;
-        background: rgba(22, 199, 232, 0.12);
-        color: #53E4FF;
-        border: 1px solid rgba(83, 228, 255, 0.18);
-      }
-
-      .bb-category-card {
-        min-width: 142px;
-        overflow: visible !important;
-      }
-
-      @media (min-width: 1024px) {
-        .bb-category-card {
-          min-width: 150px;
-        }
-      }
-
-      .bb-category-icon {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 58px;
-        height: 58px;
-        min-width: 58px;
-        border-radius: 18px;
-        background:
-          radial-gradient(circle at 30% 25%, rgba(83, 228, 255, 0.28), transparent 38%),
-          linear-gradient(135deg, rgba(11, 61, 145, 0.78), rgba(6, 26, 61, 0.98));
-        color: #53E4FF;
-        border: 1px solid rgba(83, 228, 255, 0.24);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 10px 26px rgba(0,0,0,0.25);
-      }
-
-      .bb-category-icon-active {
-        background:
-          radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.25), transparent 38%),
-          linear-gradient(135deg, #0B63CE, #16C7E8);
-        color: #ffffff;
-        border-color: rgba(83, 228, 255, 0.75);
-      }
-
-      .bb-category-title {
-        color: #ffffff !important;
-        opacity: 1 !important;
-        visibility: visible !important;
-        line-height: 1.15;
-      }
-
-      .bb-category-subtitle {
-        color: #9fb7d7 !important;
-        opacity: 1 !important;
-        visibility: visible !important;
-      }
-
-      .bb-category-card {
-        min-width: 158px;
-        overflow: visible !important;
-      }
-
     `}</style>
   );
 }
-
-
-function CategoryIcon({ category, active = false }) {
-  const key = String(category || '').toLowerCase();
-
-  const common = {
-    width: 34,
-    height: 34,
-    viewBox: '0 0 64 64',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 3.2,
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    'aria-hidden': 'true'
-  };
-
-  const iconClass = active
-    ? 'bb-category-icon bb-category-icon-active'
-    : 'bb-category-icon';
-
-  if (key.includes('processor') || key.includes('cpu')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <rect x="18" y="18" width="28" height="28" rx="5" />
-          <rect x="25" y="25" width="14" height="14" rx="3" />
-          <path d="M10 23h8M10 32h8M10 41h8M46 23h8M46 32h8M46 41h8M23 10v8M32 10v8M41 10v8M23 46v8M32 46v8M41 46v8" />
-          <path d="M28 32h8" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (key.includes('mother') || key.includes('board')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <rect x="15" y="8" width="34" height="48" rx="5" />
-          <rect x="21" y="14" width="14" height="14" rx="3" />
-          <path d="M39 15h5M39 22h5M21 36h22M21 44h15" />
-          <path d="M9 19h6M9 32h6M9 45h6M49 19h6M49 32h6M49 45h6" />
-          <circle cx="42" cy="49" r="2" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (key.includes('graphics') || key.includes('gpu') || key.includes('video')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <rect x="8" y="18" width="42" height="28" rx="5" />
-          <circle cx="32" cy="32" r="9" />
-          <circle cx="32" cy="32" r="3" />
-          <path d="M50 25h6v14h-6M15 48v5M43 48v5M15 24h8" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (key.includes('memory') || key.includes('ram')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <rect x="8" y="22" width="48" height="20" rx="4" />
-          <path d="M17 22v20M26 22v20M35 22v20M44 22v20" />
-          <path d="M14 46v5M23 46v5M32 46v5M41 46v5M50 46v5" />
-          <path d="M12 18h40" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (key.includes('storage') || key.includes('ssd') || key.includes('hdd')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <rect x="16" y="9" width="32" height="46" rx="5" />
-          <path d="M23 18h18M23 27h18M23 36h10" />
-          <circle cx="42" cy="45" r="3" />
-          <path d="M22 51h20" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (key.includes('power') || key.includes('psu')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <rect x="10" y="16" width="44" height="32" rx="6" />
-          <circle cx="27" cy="32" r="9" />
-          <path d="M27 23v18M18 32h18" />
-          <path d="M42 25h6M42 32h6M42 39h6" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (key.includes('cooler') || key.includes('fan')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <circle cx="32" cy="32" r="5" />
-          <path d="M32 9c8 7 8 14 0 18M55 32c-7 8-14 8-18 0M32 55c-8-7-8-14 0-18M9 32c7-8 14-8 18 0" />
-          <circle cx="32" cy="32" r="23" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (key.includes('case')) {
-    return (
-      <span className={iconClass}>
-        <svg {...common}>
-          <rect x="20" y="7" width="24" height="50" rx="5" />
-          <path d="M26 17h12M26 26h12" />
-          <circle cx="32" cy="42" r="4" />
-          <path d="M44 15h5M44 25h5M44 35h5" />
-        </svg>
-      </span>
-    );
-  }
-
-  return (
-    <span className={iconClass}>
-      <svg {...common}>
-        <rect x="12" y="12" width="40" height="40" rx="8" />
-        <path d="M22 24h20M22 32h20M22 40h12" />
-      </svg>
-    </span>
-  );
-}
-
-
-function HeroVisualIcon({ type }) {
-  const key = String(type || '').toLowerCase();
-
-  const common = {
-    width: 44,
-    height: 44,
-    viewBox: '0 0 64 64',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 3,
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    'aria-hidden': 'true'
-  };
-
-  if (key === 'advisor') {
-    return (
-      <svg {...common}>
-        <rect x="12" y="12" width="40" height="40" rx="10" />
-        <path d="M22 27h20M22 37h12" />
-        <path d="M32 6v6M32 52v6M6 32h6M52 32h6" />
-        <path d="M18 18l-4-4M46 18l4-4M18 46l-4 4M46 46l4 4" />
-      </svg>
-    );
-  }
-
-  if (key === 'student') {
-    return (
-      <svg {...common}>
-        <path d="M8 23l24-12 24 12-24 12L8 23z" />
-        <path d="M18 29v12c7 6 21 6 28 0V29" />
-        <path d="M54 25v18" />
-        <path d="M20 48h24" />
-      </svg>
-    );
-  }
-
-  if (key === 'upgrade') {
-    return (
-      <svg {...common}>
-        <path d="M41 10l13 13-10 10-13-13 10-10z" />
-        <path d="M34 27L15 46" />
-        <path d="M11 50l8-2-6-6-2 8z" />
-        <path d="M14 17h18M14 25h12M40 43h10M45 38v10" />
-      </svg>
-    );
-  }
-
-  if (key === 'assembly') {
-    return (
-      <svg {...common}>
-        <rect x="12" y="13" width="40" height="38" rx="6" />
-        <path d="M20 23h24M20 33h15M20 43h8" />
-        <path d="M41 36l5 5 9-12" />
-        <path d="M24 9v8M40 9v8" />
-      </svg>
-    );
-  }
-
-  if (key === 'gaming') {
-    return (
-      <svg {...common}>
-        <rect x="10" y="20" width="44" height="26" rx="10" />
-        <path d="M22 29v8M18 33h8" />
-        <circle cx="42" cy="31" r="2" />
-        <circle cx="47" cy="36" r="2" />
-        <path d="M25 46l-5 7M39 46l5 7" />
-      </svg>
-    );
-  }
-
-  return (
-    <svg {...common}>
-      <rect x="12" y="12" width="40" height="40" rx="10" />
-      <path d="M22 24h20M22 32h20M22 40h12" />
-    </svg>
-  );
-}
-
 
 export default function App() {
   const [activePage, setActivePage] = useState('home');
@@ -800,141 +559,173 @@ export default function App() {
   const [inventoryMode, setInventoryMode] = useState('active');
   const [upgradeMode, setUpgradeMode] = useState('reference');
   const [activeTab, setActiveTab] = useState('Processors');
+
+  // Search & Extended Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBrand, setSelectedBrand] = useState('All');
+  const [selectedFormFactor, setSelectedFormFactor] = useState('All');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
+  const [sortBy, setSortBy] = useState('price-asc');
+
+  // Smart Build Assistant States
+  const [assistantBudget, setAssistantBudget] = useState(40000);
+  const [assistantProfile, setAssistantProfile] = useState('Gaming');
+  const [assistantStatus, setAssistantStatus] = useState('');
+
+  // Dynamic Rule-Based DSS Parameters
+  const [dssRules, setDssRules] = useState(() => {
+    try {
+      const saved = localStorage.getItem('bytebuild_dss_rules');
+      return saved ? { ...DEFAULT_DSS_RULES, ...JSON.parse(saved) } : DEFAULT_DSS_RULES;
+    } catch {
+      return DEFAULT_DSS_RULES;
+    }
+  });
+
   const [selectedBuild, setSelectedBuild] = useState(INITIAL_BUILD);
   const [existingPc, setExistingPc] = useState(INITIAL_EXISTING_PC);
   const [loading, setLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState(null);
-  const [activeHeroSlide, setActiveHeroSlide] = useState(0);
-  const [assistantForm, setAssistantForm] = useState({
-    budget: '60000',
-    purpose: 'Gaming',
-    preference: 'Best Value',
+
+  const [existingRamCount, setExistingRamCount] = useState(null);
+  const [selectedRamCount, setSelectedRamCount] = useState(2);
+
+  const printReferenceId = useMemo(() => Math.floor(100000 + Math.random() * 900000), []);
+  const printDateString = useMemo(
+    () => new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' }),
+    []
+  );
+
+  // Authentication & Password Recovery State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authMode, setAuthMode] = useState('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [forgotEmailSent, setForgotEmailSent] = useState(false);
+
+  // Saved Builds & Quotation Export State
+  const [savedBuilds, setSavedBuilds] = useState([]);
+  const [savingBuild, setSavingBuild] = useState(false);
+  const [exportingQuote, setExportingQuote] = useState(false);
+
+  // Pre-Order Workflow State
+  const [preorderModalItem, setPreorderModalItem] = useState(null);
+  const [userPreorders, setUserPreorders] = useState([]);
+  const [preorderForm, setPreorderForm] = useState({
+    customer_name: '',
+    contact_number: '',
+    email: '',
+  });
+  const [preorderSubmitting, setPreorderSubmitting] = useState(false);
+
+  // Hidden Administrator Module States
+  const [logoTapCount, setLogoTapCount] = useState(0);
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminPinInput, setAdminPinInput] = useState('');
+  const [adminSection, setAdminSection] = useState('catalog');
+  const [adminTableSource, setAdminTableSource] = useState('active');
+  const [adminCategoryFilter, setAdminCategoryFilter] = useState('All');
+  const [adminSearch, setAdminSearch] = useState('');
+  const [adminQuotations, setAdminQuotations] = useState([]);
+  const [adminAllPreorders, setAdminAllPreorders] = useState([]);
+  const [adminSaving, setAdminSaving] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [newItemForm, setNewItemForm] = useState({
+    name: '',
+    brand: '',
+    category: 'Processors',
+    price: '',
+    stock_status: 'In Stock',
+    socket: '',
+    memory_type: '',
+    form_factor: '',
+    hardware_score: 78,
+    specs: '',
   });
 
-  const heroSlides = [
-    {
-      eyebrow: 'BYTEBUILD PC STORE',
-      title: 'Configure, upgrade, and quote your next PC.',
-      body: 'Get guided component selection, compatibility validation, upgrade advice, and ready-to-review PC quotations.',
-      primary: 'Start PC Builder',
-      primaryPage: 'builder',
-      secondary: 'Check Upgrade',
-      secondaryPage: 'upgrade',
-      badge: 'Smart Build Assistant',
-      visualTitle: 'Compatible PC Builds',
-      visualBody: 'CPU, board, RAM, GPU, PSU, cooler, and case checks in one flow.',
-      iconType: 'advisor',
-      accent: 'from-[#0B3D91] via-[#0b3273] to-[#16C7E8]',
-      glow: 'bg-[#16C7E8]/20',
-      features: [
-        ['Socket Check', 'CPU + board validation'],
-        ['Power Check', 'Estimated PSU headroom'],
-        ['Upgrade Path', 'Current PC recommendations'],
-      ],
-      bannerLabel: 'Build Flow',
-      bannerText: 'Configure, upgrade, and quote your next PC.',
-    },
-    {
-      eyebrow: 'STUDENT PACKAGE',
-      title: 'Starter packages for school and productivity.',
-      body: 'Budget-friendly PC recommendations for classes, documents, browsing, video meetings, and light editing.',
-      primary: 'View Student Builds',
-      primaryPage: 'assistant',
-      secondary: 'Browse Parts',
-      secondaryPage: 'products',
-      badge: 'Student Build Bundle',
-      visualTitle: 'School Ready Builds',
-      visualBody: 'Balanced CPU, memory, SSD, and PSU choices for everyday student workloads.',
-      iconType: 'student',
-      accent: 'from-[#0b2447] via-[#0B3D91] to-[#38bdf8]',
-      glow: 'bg-[#38bdf8]/20',
-      features: [
-        ['Budget Target', 'Starter-friendly pricing'],
-        ['Fast Storage', 'SSD-first configuration'],
-        ['Daily Use', 'Office and browsing ready'],
-      ],
-      bannerLabel: 'Student Promo',
-      bannerText: 'Budget-friendly PCs for school and productivity.',
-    },
-    {
-      eyebrow: 'UPGRADE CONSULTATION',
-      title: 'Already have a PC? Check what to upgrade first.',
-      body: 'Select current parts, compare compatibility, and get upgrade recommendations from the Reference Parts Database.',
-      primary: 'Check My PC',
-      primaryPage: 'upgrade',
-      secondary: 'Open Catalog',
-      secondaryPage: 'products',
-      badge: 'Upgrade Checker',
-      visualTitle: 'Current PC Analysis',
-      visualBody: 'Find CPU, GPU, memory, storage, power, cooling, and case upgrade limits.',
-      iconType: 'upgrade',
-      accent: 'from-[#082f49] via-[#0B3D91] to-[#0e7490]',
-      glow: 'bg-[#0e7490]/25',
-      features: [
-        ['Owned Parts', 'Input current hardware'],
-        ['Risk Check', 'Bottleneck and power limits'],
-        ['Next Upgrade', 'Prioritized upgrade direction'],
-      ],
-      bannerLabel: 'Upgrade Path',
-      bannerText: 'Know what to replace before buying new components.',
-    },
-    {
-      eyebrow: 'FREE BASIC ASSEMBLY',
-      title: 'Complete builds can qualify for basic assembly support.',
-      body: 'Promote complete system builds with a professional quotation flow and clear DSS recommendation output.',
-      primary: 'Build a Full PC',
-      primaryPage: 'builder',
-      secondary: 'See Promos',
-      secondaryPage: 'promos',
-      badge: 'Quotation Ready',
-      visualTitle: 'Assembly Support',
-      visualBody: 'Complete compatible builds can be reviewed and prepared for basic assembly service.',
-      iconType: 'assembly',
-      accent: 'from-[#0f172a] via-[#0B3D91] to-[#0891b2]',
-      glow: 'bg-[#0891b2]/25',
-      features: [
-        ['Full Build', 'Complete part selection'],
-        ['Quote Ready', 'Clean quotation output'],
-        ['Review Flow', 'Easy customer approval'],
-      ],
-      bannerLabel: 'Service Promo',
-      bannerText: 'Complete builds can qualify for basic assembly support.',
-    },
-    {
-      eyebrow: 'GAMING STARTER BUNDLE',
-      title: 'Balanced gaming builds for 1080p play.',
-      body: 'Recommended CPU, board, RAM, GPU, storage, and power combinations for entry to mid-range gaming.',
-      primary: 'Explore Gaming Builds',
-      primaryPage: 'assistant',
-      secondary: 'Shop GPUs',
-      secondaryPage: 'products',
-      badge: 'Gaming Recommendation',
-      visualTitle: '1080p Gaming Path',
-      visualBody: 'GPU-focused configurations with enough CPU, memory, and PSU support for smooth gaming.',
-      iconType: 'gaming',
-      accent: 'from-[#111827] via-[#0B3D91] to-[#7c3aed]',
-      glow: 'bg-[#7c3aed]/25',
-      features: [
-        ['GPU Priority', 'More budget to graphics'],
-        ['16GB RAM', 'Recommended baseline'],
-        ['PSU Check', 'Safe power allowance'],
-      ],
-      bannerLabel: 'Gaming Promo',
-      bannerText: 'Build a practical gaming PC with compatibility checks included.',
-    },
-  ];
+  const isAdminAccount = useMemo(() => {
+    if (!currentUser?.email) return false;
+    return ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
+  }, [currentUser]);
 
+  // Secret Keyboard Shortcut (Ctrl + Shift + A) to open Admin Lock screen
   useEffect(() => {
-    const heroTimer = window.setInterval(() => {
-      setActiveHeroSlide((current) => (current + 1) % heroSlides.length);
-    }, 6500);
+    const handleKeyDown = (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setActivePage('admin');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
-    return () => window.clearInterval(heroTimer);
-  }, [heroSlides.length]);
+  // Secret 5-Tap Logo Handler (Works on Mobile APK & Desktop)
+  const handleLogoClick = () => {
+    setActivePage('home');
+    setLogoTapCount((prev) => {
+      const next = prev + 1;
+      if (next >= 5) {
+        setActivePage('admin');
+        return 0;
+      }
+      return next;
+    });
+  };
 
+  // Dedicated Admin Logout / Lock Handler
+  const handleAdminLogout = () => {
+    setAdminUnlocked(false);
+    setAdminPinInput('');
+    setEditingItem(null);
+    setActivePage('home');
+  };
+
+  // URL Hash Recovery Guard & Auth State Listener
   useEffect(() => {
+    const checkRecoveryState = () => {
+      const hash = window.location.hash;
+      if (hash && (hash.includes('type=recovery') || hash.includes('access_token'))) {
+        setActivePage('login');
+        setAuthMode('update-password');
+        return true;
+      }
+      return false;
+    };
+
+    const isRecovery = checkRecoveryState();
+
+    if (!isRecovery) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setCurrentUser(session?.user ?? null);
+        if (session?.user?.email) {
+          setPreorderForm((prev) => ({ ...prev, email: session.user.email }));
+        }
+      });
+    }
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'PASSWORD_RECOVERY' || window.location.hash.includes('type=recovery')) {
+        setActivePage('login');
+        setAuthMode('update-password');
+      } else if (!window.location.hash.includes('type=recovery')) {
+        setCurrentUser(session?.user ?? null);
+        if (session?.user?.email) {
+          setPreorderForm((prev) => ({ ...prev, email: session.user.email }));
+        }
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchInventory = useCallback(async () => {
     async function fetchAllRows(tableName) {
       let allRows = [];
       let from = 0;
@@ -960,36 +751,322 @@ export default function App() {
       return allRows;
     }
 
-    async function fetchInventory() {
-      setLoading(true);
+    setLoading(true);
+    try {
+      const [activeRows, preorderRows, referenceRows] = await Promise.all([
+        fetchAllRows(ACTIVE_TABLE),
+        fetchAllRows(PREORDER_TABLE),
+        fetchAllRows(REFERENCE_TABLE),
+      ]);
 
-      try {
-        const [activeRows, preorderRows, referenceRows] = await Promise.all([
-          fetchAllRows(ACTIVE_TABLE),
-          fetchAllRows(PREORDER_TABLE),
-          fetchAllRows(REFERENCE_TABLE),
-        ]);
-
-        setActiveProducts(activeRows);
-        setPreorderProducts(preorderRows);
-        setReferenceParts(referenceRows);
-      } catch (err) {
-        console.error('Supabase Sync Error:', err.message);
-      } finally {
-        setLoading(false);
-      }
+      setActiveProducts(activeRows);
+      setPreorderProducts(preorderRows);
+      setReferenceParts(referenceRows);
+    } catch (err) {
+      console.error('Database Sync Error:', err.message);
+    } finally {
+      setLoading(false);
     }
-
-    fetchInventory();
   }, []);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      setActiveHeroSlide((current) => (current + 1) % heroSlides.length);
-    }, 5200);
+    fetchInventory();
+  }, [fetchInventory]);
 
-    return () => clearInterval(timer);
-  }, [heroSlides.length]);
+  const fetchUserData = useCallback(async () => {
+    if (!currentUser) {
+      setSavedBuilds([]);
+      setUserPreorders([]);
+      return;
+    }
+
+    try {
+      const { data: builds, error: buildsErr } = await supabase
+        .from('bytebuild_saved_builds')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false });
+
+      if (!buildsErr && builds) setSavedBuilds(builds);
+
+      const { data: orders, error: ordersErr } = await supabase
+        .from('bytebuild_preorder_requests')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false });
+
+      if (!ordersErr && orders) setUserPreorders(orders);
+    } catch (err) {
+      console.error('User Records Sync Error:', err.message);
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    fetchUserData();
+  }, [fetchUserData]);
+
+  const fetchAdminLogs = useCallback(async () => {
+    try {
+      const { data: quotes } = await supabase
+        .from('bytebuild_quotations')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (quotes) setAdminQuotations(quotes);
+    } catch (_) {
+      // Optional table
+    }
+
+    try {
+      const { data: preorders } = await supabase
+        .from('bytebuild_preorder_requests')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (preorders) setAdminAllPreorders(preorders);
+    } catch (_) {
+      // Optional table
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activePage === 'admin') {
+      fetchAdminLogs();
+    }
+  }, [activePage, fetchAdminLogs]);
+
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+
+    try {
+      if (authMode === 'login') {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        if (data?.user) {
+          setCurrentUser(data.user);
+          setActivePage('home');
+        }
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (error) throw error;
+        if (data?.user) {
+          setCurrentUser(data.user);
+          setActivePage('home');
+        }
+      }
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(authEmail, {
+        redirectTo: window.location.origin,
+      });
+      if (error) throw error;
+      setForgotEmailSent(true);
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleUpdatePassword = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+
+      alert('Password updated successfully! You can now sign in with your new password.');
+      
+      window.location.hash = '';
+      await supabase.auth.signOut();
+      setCurrentUser(null);
+
+      setAuthMode('login');
+      setNewPassword('');
+    } catch (err) {
+      setAuthError(err.message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    setCurrentUser(null);
+    setAdminUnlocked(false);
+    setAdminPinInput('');
+    setSavedBuilds([]);
+    setUserPreorders([]);
+    setAuthEmail('');
+    setAuthPassword('');
+    setActivePage('home');
+  };
+
+  // Admin Database CRUD Handlers
+  const handleAdminAddItem = async (e, targetType = 'catalog') => {
+    e.preventDefault();
+    setAdminSaving(true);
+
+    const tableName =
+      targetType === 'reference'
+        ? REFERENCE_TABLE
+        : adminTableSource === 'preorder'
+        ? PREORDER_TABLE
+        : ACTIVE_TABLE;
+
+    try {
+      const payload = {
+        name: newItemForm.name.trim(),
+        brand: newItemForm.brand.trim() || 'OEM',
+        category: newItemForm.category,
+        socket: newItemForm.socket.trim() || null,
+        memory_type: newItemForm.memory_type.trim() || null,
+        form_factor: newItemForm.form_factor.trim() || null,
+        hardware_score: Number(newItemForm.hardware_score) || 75,
+        specs: newItemForm.specs.trim() || 'Standard specification',
+      };
+
+      if (targetType !== 'reference') {
+        payload.price = Number(newItemForm.price) || 0;
+        payload.stock_status =
+          adminTableSource === 'preorder' ? 'Pre-Order' : newItemForm.stock_status;
+      } else {
+        payload.source_type = 'reference';
+      }
+
+      const { error } = await supabase.from(tableName).insert([payload]);
+      if (error) throw error;
+
+      alert(`Added "${payload.name}" to ${tableName}!`);
+      setNewItemForm({
+        name: '',
+        brand: '',
+        category: newItemForm.category,
+        price: '',
+        stock_status: 'In Stock',
+        socket: '',
+        memory_type: '',
+        form_factor: '',
+        hardware_score: 78,
+        specs: '',
+      });
+      await fetchInventory();
+    } catch (err) {
+      alert(`Admin Insert Error: ${err.message}`);
+    } finally {
+      setAdminSaving(false);
+    }
+  };
+
+  const handleAdminSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editingItem) return;
+    setAdminSaving(true);
+
+    const tableName =
+      editingItem._table ||
+      (adminSection === 'reference'
+        ? REFERENCE_TABLE
+        : adminTableSource === 'preorder'
+        ? PREORDER_TABLE
+        : ACTIVE_TABLE);
+
+    try {
+      const updates = {
+        name: editingItem.name,
+        brand: editingItem.brand,
+        category: editingItem.category,
+        socket: editingItem.socket || null,
+        memory_type: editingItem.memory_type || null,
+        form_factor: editingItem.form_factor || null,
+        hardware_score: Number(editingItem.hardware_score || 75),
+        specs: editingItem.specs || '',
+      };
+
+      if (tableName !== REFERENCE_TABLE) {
+        updates.price = Number(editingItem.price || 0);
+        updates.stock_status = editingItem.stock_status || 'In Stock';
+      }
+
+      const { error } = await supabase
+        .from(tableName)
+        .update(updates)
+        .eq('id', editingItem.id);
+
+      if (error) throw error;
+
+      setEditingItem(null);
+      await fetchInventory();
+    } catch (err) {
+      alert(`Update failed: ${err.message}`);
+    } finally {
+      setAdminSaving(false);
+    }
+  };
+
+  const handleAdminQuickStatusToggle = async (item, tableName, nextStatus) => {
+    try {
+      const { error } = await supabase
+        .from(tableName)
+        .update({ stock_status: nextStatus })
+        .eq('id', item.id);
+      if (error) throw error;
+      await fetchInventory();
+    } catch (err) {
+      alert(`Status update failed: ${err.message}`);
+    }
+  };
+
+  const handleAdminDeleteItem = async (item, tableName) => {
+    if (!window.confirm(`Delete "${item.name}" from ${tableName}?`)) return;
+    try {
+      const { error } = await supabase.from(tableName).delete().eq('id', item.id);
+      if (error) throw error;
+      await fetchInventory();
+    } catch (err) {
+      alert(`Delete failed: ${err.message}`);
+    }
+  };
+
+  const handleAdminUpdatePreorderStatus = async (orderId, nextStatus) => {
+    try {
+      const { error } = await supabase
+        .from('bytebuild_preorder_requests')
+        .update({ status: nextStatus })
+        .eq('id', orderId);
+      if (error) throw error;
+      await fetchAdminLogs();
+    } catch (err) {
+      alert(`Could not update pre-order: ${err.message}`);
+    }
+  };
+
+  const handleSaveDssRules = (e) => {
+    e.preventDefault();
+    localStorage.setItem('bytebuild_dss_rules', JSON.stringify(dssRules));
+    alert('Compatibility & Recommendation Engine rules updated and applied across the system.');
+  };
 
   const products = inventoryMode === 'active' ? activeProducts : preorderProducts;
 
@@ -1007,7 +1084,6 @@ export default function App() {
 
   const totalPrice = selectedItems.reduce((sum, item) => sum + Number(item?.price || 0), 0);
   const monthlyEstimate = totalPrice > 0 ? totalPrice / 12 : 0;
-  const buildProgress = Math.round((selectedItems.length / CATEGORIES.length) * 100);
 
   const effectiveParts = useMemo(() => {
     return {
@@ -1022,9 +1098,12 @@ export default function App() {
     };
   }, [selectedBuild, existingPc]);
 
+  const activeRamCount = selectedBuild.Memory ? selectedRamCount : existingRamCount;
+
   const cpuProfile = getCpuProfile(effectiveParts.Processors);
   const gpuProfile = getGpuProfile(effectiveParts['Video Cards']);
-  const ramProfile = getRamProfile(effectiveParts.Memory);
+  const motherboardProfile = useMemo(() => getMotherboardProfile(effectiveParts.Motherboards), [effectiveParts.Motherboards]);
+  const ramProfile = getRamProfile(effectiveParts.Memory, activeRamCount);
   const storageProfile = getStorageProfile(effectiveParts.Storage);
   const psuProfile = getPsuProfile(effectiveParts['Power Supplies']);
   const coolerProfile = getCoolerProfile(effectiveParts['CPU Coolers']);
@@ -1033,14 +1112,16 @@ export default function App() {
   const cpuSocket = detectCpuSocket(effectiveParts.Processors);
   const motherboardSocket = detectMotherboardSocket(effectiveParts.Motherboards);
 
+  const totalSystemWattage = useMemo(() => {
+    return cpuProfile.watts + gpuProfile.watts + Number(dssRules.psuBufferWatts || 120);
+  }, [cpuProfile.watts, gpuProfile.watts, dssRules.psuBufferWatts]);
+
   const recommendedPsuWatts = useMemo(() => {
-    const base = cpuProfile.watts + gpuProfile.watts + 120;
-    return Math.ceil(base / 50) * 50;
-  }, [cpuProfile.watts, gpuProfile.watts]);
+    return Math.ceil(totalSystemWattage / 50) * 50;
+  }, [totalSystemWattage]);
 
   const dssIssues = useMemo(() => {
     const issues = [];
-
     const cpu = effectiveParts.Processors;
     const board = effectiveParts.Motherboards;
     const gpu = effectiveParts['Video Cards'];
@@ -1052,107 +1133,175 @@ export default function App() {
 
     if (cpu && board && cpuSocket && motherboardSocket && cpuSocket !== motherboardSocket) {
       issues.push({
+        category: 'Socket Match',
         severity: 'critical',
-        title: 'CPU and Motherboard Socket Mismatch',
-        message: `${cpu.name} uses ${cpuSocket}, while ${board.name} uses ${motherboardSocket}. These parts cannot be used together.`,
-        action: 'Choose a motherboard with the same socket as the processor, or choose a processor that matches the motherboard.',
+        title: 'CPU and Motherboard Platform Incompatible',
+        message: `${cpu.name} requires socket ${cpuSocket}, but ${board.name} operates on ${motherboardSocket}. Parts will not physically connect.`,
+        action: `Select an ${cpuSocket} motherboard (e.g. ${cpuSocket === 'AM5' ? 'B650' : cpuSocket === 'AM4' ? 'B550' : 'B760'}) or change the processor.`,
+      });
+    }
+
+    if (cpu && board && cpuProfile.tier >= 5 && motherboardProfile.tier === 'Entry') {
+      issues.push({
+        category: 'Power Delivery',
+        severity: 'warning',
+        title: 'Motherboard VRM Throttle Risk',
+        message: `${cpu.name} (${cpuProfile.watts}W package power) is paired with an entry chipset (${board.name}). Unheatsinked VRMs will overheat under load.`,
+        action: 'Upgrade to a B-series or Z/X-series motherboard with heatsinked power phases.',
       });
     }
 
     if (board && ram) {
-      const boardMemory = board.memory_type;
-      const ramType = getRamProfile(ram).type;
-
-      if (boardMemory && ramType && boardMemory !== ramType) {
+      const boardMemory = board.memory_type || motherboardProfile.memoryType;
+      const ramType = ramProfile.type;
+      if (boardMemory && ramType && boardMemory !== 'Unknown' && ramType !== 'Unknown' && boardMemory !== ramType) {
         issues.push({
+          category: 'RAM Standard',
           severity: 'critical',
-          title: 'Motherboard and RAM Type Mismatch',
-          message: `${board.name} supports ${boardMemory}, while ${ram.name} is ${ramType}.`,
-          action: `Use ${boardMemory} memory for this motherboard.`,
+          title: 'Memory Standard Mismatch',
+          message: `${board.name} utilizes ${boardMemory} slots, but ${ram.name} is ${ramType}. Physical pinouts are incompatible.`,
+          action: `Use ${boardMemory} memory modules for this platform.`,
+        });
+      }
+    }
+
+    if (board && ram && ramProfile.stickCount > motherboardProfile.dimmSlots) {
+      issues.push({
+        category: 'Slot Limit',
+        severity: 'critical',
+        title: 'Exceeded Physical DIMM Slot Limit',
+        message: `Selected ${ramProfile.stickCount}x sticks of RAM, but ${board.name} has only ${motherboardProfile.dimmSlots} physical slots.`,
+        action: `Use a 2-stick kit with higher per-stick density (e.g., 2x16GB instead of 4x8GB).`,
+      });
+    }
+
+    if (ram) {
+      if (!ramProfile.hasChosenSticks && activePage === 'upgrade') {
+        issues.push({
+          category: 'RAM Architecture',
+          severity: 'info',
+          title: 'Specify Installed Memory Modules',
+          message: `Configure how many sticks of ${ram.name} are installed (1x, 2x, or 4x) to verify if your memory bus operates in 64-bit or 128-bit mode.`,
+          action: 'Click 1x, 2x, or 4x on the memory selector card.',
+        });
+      } else if (ramProfile.isSingleChannel) {
+        issues.push({
+          category: 'Bandwidth',
+          severity: 'warning',
+          title: 'Single-Channel Memory Bus Bottleneck (64-Bit)',
+          message: `Running 1 single RAM stick cuts peak memory bandwidth by ~50%, reducing 1% low gaming framerates.`,
+          action: 'Install 2 matching RAM sticks in dual-channel configuration (Slots 2 & 4).',
+        });
+      } else if (ramProfile.isQuadChannelOrPopulated && ramProfile.type === 'DDR5') {
+        issues.push({
+          category: 'Memory Controller',
+          severity: 'warning',
+          title: '4-DIMM DDR5 Memory Controller Load',
+          message: `Populating 4 sticks of DDR5 heavily loads the CPU memory controller, often forcing lower speed profiles for boot stability.`,
+          action: 'For high stability, use a high-capacity 2-stick kit (2x16GB or 2x32GB).',
+        });
+      }
+
+      const minRamRule = Number(dssRules.minRecommendedRamGB || 16);
+      if (ramProfile.totalCapacity > 0 && ramProfile.totalCapacity < minRamRule) {
+        issues.push({
+          category: 'Capacity',
+          severity: 'warning',
+          title: 'Constrained Memory Capacity',
+          message: `Total capacity is ${ramProfile.totalCapacity}GB (below the ${minRamRule}GB recommended rule). Modern desktop software leaves little headroom.`,
+          action: `Upgrade to a ${minRamRule}GB dual-channel kit minimum.`,
         });
       }
     }
 
     if (cpu && gpu) {
       const tierGap = gpuProfile.tier - cpuProfile.tier;
-
-      if (tierGap >= 3) {
+      const maxAllowedGap = Number(dssRules.maxAllowedTierGap || 2);
+      if (tierGap > maxAllowedGap) {
         issues.push({
+          category: 'Gaming Balance',
           severity: 'critical',
-          title: 'Severe CPU Bottleneck Risk',
-          message: `${cpu.name} may heavily limit ${gpu.name}, especially in games and CPU-heavy workloads.`,
-          action: 'Upgrade to a stronger 6-core or 8-core CPU before buying this graphics card.',
+          title: 'Severe CPU Bottleneck',
+          message: `${gpu.name} is significantly faster than ${cpu.name}. The graphics card will remain underutilized.`,
+          action: 'Upgrade to a modern 6-core/12-thread or 8-core gaming processor.',
         });
-      } else if (tierGap === 2) {
+      } else if (tierGap === maxAllowedGap) {
         issues.push({
+          category: 'Gaming Balance',
           severity: 'warning',
-          title: 'Possible CPU Bottleneck',
-          message: `${gpu.name} can work, but ${cpu.name} may reduce frame rates and 1% lows.`,
-          action: 'Consider upgrading the CPU if the customer wants smoother gaming performance.',
+          title: 'Moderate CPU Processing Limit',
+          message: `${cpu.name} handles ${gpu.name} well at 1440p, but high refresh 1080p will be CPU-limited.`,
+          action: 'Plan for an eventual CPU upgrade to extract the full potential of your GPU.',
+        });
+      } else if (cpuProfile.tier - gpuProfile.tier > maxAllowedGap) {
+        issues.push({
+          category: 'Gaming Balance',
+          severity: 'warning',
+          title: 'Underpowered GPU Configuration',
+          message: `${cpu.name} has substantial rendering headroom, but ${gpu.name} limits 3D visual fidelity.`,
+          action: 'Allocate more budget to the graphics card if gaming is your primary focus.',
         });
       }
+    }
 
-      if (cpuProfile.tier - gpuProfile.tier >= 3) {
+    if (psu) {
+      if (psuProfile.watts > 0 && psuProfile.watts < recommendedPsuWatts) {
         issues.push({
+          category: 'Power Supply',
+          severity: 'critical',
+          title: 'Insufficient Power Supply Headroom',
+          message: `System peak load requires at least ${recommendedPsuWatts}W. Current unit (${psuProfile.watts}W) risks shutdown during transient GPU spikes.`,
+          action: `Replace with a quality ${recommendedPsuWatts}W or higher power supply.`,
+        });
+      } else if (psuProfile.isGeneric && gpuProfile.tier >= 3) {
+        issues.push({
+          category: 'Power Supply',
           severity: 'warning',
-          title: 'GPU May Limit the Build',
-          message: `${cpu.name} is much stronger than ${gpu.name}. Gaming performance may still be limited by the graphics card.`,
-          action: 'Prioritize a GPU upgrade for gaming workloads.',
+          title: 'Unrated Power Supply Risk',
+          message: `${psu.name} lacks official 80+ efficiency certification. Lacks critical electrical circuit protections.`,
+          action: 'Use a recognized 80+ Bronze or 80+ Gold tier power supply.',
         });
       }
     }
 
-    if (ram && ramProfile.capacity > 0 && ramProfile.capacity < 16) {
-      issues.push({
-        severity: 'warning',
-        title: 'Low Memory Capacity',
-        message: `Detected RAM is ${ramProfile.capacity}GB. This may limit gaming, browsing, and multitasking.`,
-        action: 'Upgrade to 16GB dual-channel memory or higher.',
-      });
-    }
-
-    if (storage && storageProfile.isSmall) {
-      issues.push({
-        severity: 'warning',
-        title: 'Small Storage Capacity',
-        message: `${storage.name} may be too small for Windows, applications, and modern games.`,
-        action: 'Use at least a 500GB SSD.',
-      });
-    }
-
-    if (psu && psuProfile.watts > 0 && psuProfile.watts < recommendedPsuWatts) {
-      issues.push({
-        severity: 'critical',
-        title: 'Insufficient Power Supply',
-        message: `${psu.name} is around ${psuProfile.watts}W. This build is recommended to use at least ${recommendedPsuWatts}W.`,
-        action: `Use a ${recommendedPsuWatts}W or higher 80+ rated PSU.`,
-      });
-    }
-
-    if (psu && psuProfile.rating === 'Unknown' && gpuProfile.tier >= 3) {
-      issues.push({
-        severity: 'warning',
-        title: 'PSU Quality Check Needed',
-        message: `${psu.name} does not show a clear efficiency rating in the product name.`,
-        action: 'Use a known 80+ Bronze or Gold-rated PSU for gaming builds.',
-      });
+    if (storage) {
+      const minStorageRule = Number(dssRules.minStorageCapacityGB || 500);
+      if (storageProfile.isHdd) {
+        issues.push({
+          category: 'Storage Speed',
+          severity: 'critical',
+          title: 'Mechanical Boot Drive Detected',
+          message: `Running Windows from a mechanical hard drive (${storage.name}) causes slow boot times and system lag.`,
+          action: 'Install a high-speed M.2 NVMe SSD as the primary OS boot drive.',
+        });
+      } else if (storageProfile.capacityGB < minStorageRule) {
+        issues.push({
+          category: 'Storage Space',
+          severity: 'warning',
+          title: 'Restricted Storage Footprint',
+          message: `${storageProfile.capacityGB}GB is below the ${minStorageRule}GB baseline threshold and fills up quickly with OS cache and games.`,
+          action: `Equip at least a ${minStorageRule}GB or 1TB drive for a comfortable baseline.`,
+        });
+      }
     }
 
     if (cooler && coolerProfile.tier < cpuProfile.coolerNeed) {
       issues.push({
+        category: 'Thermal',
         severity: 'warning',
-        title: 'Cooling May Be Insufficient',
-        message: `${cooler.name} may be weak for ${effectiveParts.Processors?.name}.`,
-        action: 'Use a stronger tower cooler or liquid cooler depending on CPU heat output.',
+        title: 'Cooling Capacity Below Recommended TDP',
+        message: `${cooler.name} is undersized for ${effectiveParts.Processors?.name}. Under load, temperatures may trigger thermal throttle.`,
+        action: 'Upgrade to a dual-tower air cooler or 240mm/360mm AIO liquid cooler.',
       });
     }
 
     if (pcCase && !caseProfile.airflow && gpuProfile.tier >= 4) {
       issues.push({
+        category: 'Chassis',
         severity: 'warning',
-        title: 'Case Airflow Warning',
-        message: `${pcCase.name} may not provide enough airflow for a higher-power GPU.`,
-        action: 'Use a mesh airflow case with proper fan support.',
+        title: 'Restricted Front Panel Airflow',
+        message: `Solid front panels trap heat from high-wattage GPUs (${gpuProfile.watts}W), raising internal ambient temperature.`,
+        action: 'Select a case with a high-permeability front mesh intake.',
       });
     }
 
@@ -1168,12 +1317,15 @@ export default function App() {
     psuProfile,
     coolerProfile,
     caseProfile,
+    motherboardProfile,
     recommendedPsuWatts,
+    activePage,
+    dssRules,
   ]);
 
   const recommendation = useMemo(() => {
     const critical = dssIssues.find((issue) => issue.severity === 'critical');
-    const warning = dssIssues.find((issue) => issue.severity === 'warning');
+    const warnings = dssIssues.filter((issue) => issue.severity === 'warning');
     const preOrderPart = selectedItems.find((item) => item?.stock_status === 'Pre-Order');
 
     if (critical) {
@@ -1183,105 +1335,106 @@ export default function App() {
         summary: `${critical.message}\n\nRecommended Action: ${critical.action}`,
       };
     }
-
-    if (warning) {
+    if (warnings.length > 0) {
       return {
-        title: warning.title,
+        title: `${warnings.length} Hardware Balance Note${warnings.length > 1 ? 's' : ''}`,
         tone: 'warning',
-        summary: `${warning.message}\n\nRecommended Action: ${warning.action}`,
+        summary: `Hardware is operational, but our validator detected ${warnings.length} balance bottlenecks.\n\nPrimary Focus: ${warnings[0].message}`,
       };
     }
-
     if (preOrderPart) {
       return {
-        title: 'Pre-Order Item Included',
+        title: 'Pre-Order Allocation Pending',
         tone: 'info',
-        summary: `${preOrderPart.name} requires supplier confirmation before final quotation.`,
+        summary: `${preOrderPart.name} is currently reserved via supplier pre-order. Final quotation and assembly lead time will be confirmed upon distributor stock arrival.`,
       };
     }
-
     if (selectedItems.length === 0 && Object.values(existingPc).filter(Boolean).length === 0) {
       return {
-        title: 'Ready for Selection',
+        title: 'System Validator Ready',
         tone: 'neutral',
-        summary: 'Choose current PC parts or upgrade parts to generate compatibility, power, and upgrade recommendations.',
+        summary: 'Select existing or proposed components to analyze socket pinouts, RAM channels, power delivery, and thermal tolerances.',
       };
     }
-
     return {
-      title: 'Build Looks Compatible',
+      title: 'Platform Architecture Verified',
       tone: 'success',
-      summary: `No major issue detected. Recommended PSU headroom: ${recommendedPsuWatts}W. The build is ready for upgrade or quotation review.`,
+      summary: `All platform criteria cleared.\n• Socket: ${cpuSocket || 'Validated'}\n• Memory Bus: ${ramProfile.isDualChannel ? '128-Bit Dual-Channel Active' : 'Configured'}\n• Power Headroom: ~${psuProfile.watts > 0 ? psuProfile.watts - recommendedPsuWatts : dssRules.psuBufferWatts}W buffer above transient peak.`,
     };
-  }, [dssIssues, selectedItems, existingPc, recommendedPsuWatts]);
+  }, [dssIssues, selectedItems, existingPc, cpuSocket, ramProfile, psuProfile, recommendedPsuWatts, dssRules.psuBufferWatts]);
 
   const compatibilityScore = useMemo(() => {
     let score = 100;
-
     dssIssues.forEach((issue) => {
       if (issue.severity === 'critical') score -= 35;
       if (issue.severity === 'warning') score -= 15;
     });
-
     selectedItems.forEach((item) => {
       if (item?.stock_status === 'Sold Out') score -= 25;
       if (item?.stock_status === 'Pre-Order') score -= 8;
     });
-
     return Math.max(score, 0);
   }, [dssIssues, selectedItems]);
 
   const performanceTier = useMemo(() => {
-    if (!effectiveParts['Video Cards']) {
+    const cpuName = String(effectiveParts.Processors?.name || '').toUpperCase();
+    const hasApuGraphics = cpuName.includes('G') && !effectiveParts['Video Cards'];
+
+    if (!effectiveParts['Video Cards'] && !hasApuGraphics) {
       return {
         label: 'Select a Graphics Card',
-        description: 'Choose a GPU to estimate gaming and productivity performance.',
+        description: 'Choose a GPU (or an APU with integrated graphics) to estimate gaming and productivity performance tiers.',
       };
     }
-
     const critical = dssIssues.find((issue) => issue.severity === 'critical');
     if (critical) {
       return {
-        label: 'Compatibility Issue',
+        label: 'Compatibility Conflict Detected',
         description: critical.message,
       };
     }
-
     if (gpuProfile.tier >= 4 && cpuProfile.tier >= 4) {
       return {
-        label: 'Balanced Gaming Build',
-        description: 'Good CPU and GPU balance for gaming, school work, editing, and productivity.',
+        label: 'Performance Gaming & Creator Rig',
+        description: 'Excellent CPU and GPU balance for 1440p gaming, streaming, and content creation.',
       };
     }
-
     if (gpuProfile.tier === 3) {
       return {
-        label: 'Mid-Range Build',
-        description: 'Good for 1080p gaming and daily productivity.',
+        label: '1080p Esports & Productivity Rig',
+        description: 'Optimal for smooth 1080p high refresh-rate competitive titles and office work.',
       };
     }
-
     return {
-      label: 'Entry-Level Build',
-      description: 'Best for school work, office tasks, esports titles, and light gaming.',
+      label: 'Entry / Office Desktop Configuration',
+      description: 'Ideal for general office productivity, academic workflows, and light esports titles.',
     };
   }, [effectiveParts, dssIssues, cpuProfile, gpuProfile]);
 
   const brandsForActiveCategory = useMemo(() => {
     const active = normalizeText(activeTab);
-
     const brands = catalogProducts
       .filter((product) => normalizeText(product?.category) === active && product?.brand)
       .map((product) => product.brand);
-
     return ['All', ...new Set(brands)];
+  }, [catalogProducts, activeTab]);
+
+  const formFactorsForActiveCategory = useMemo(() => {
+    const active = normalizeText(activeTab);
+    const factors = catalogProducts
+      .filter((product) => normalizeText(product?.category) === active)
+      .map((product) => detectPartFormFactor(product))
+      .filter((ff) => ff !== 'Standard');
+    return ['All', ...new Set(factors)];
   }, [catalogProducts, activeTab]);
 
   const filteredProducts = useMemo(() => {
     const active = normalizeText(activeTab);
     const query = normalizeText(searchQuery);
+    const minP = minPrice !== '' ? Number(minPrice) : null;
+    const maxP = maxPrice !== '' ? Number(maxPrice) : null;
 
-    return catalogProducts.filter((product) => {
+    const filtered = catalogProducts.filter((product) => {
       if (normalizeText(product?.category) !== active) return false;
 
       const searchableText = [
@@ -1293,13 +1446,8 @@ export default function App() {
         product?.memory_type,
         product?.capacity,
         product?.interface_type,
-        product?.common_aliases,
+        product?.form_factor,
         product?.specs,
-        product?.recommended_pairing,
-        product?.notes,
-        product?.source_url,
-        product?.spec_confidence,
-        product?.data_method,
       ]
         .filter(Boolean)
         .join(' ')
@@ -1307,228 +1455,287 @@ export default function App() {
 
       const matchesSearch = query === '' || searchableText.includes(query);
       const matchesBrand = selectedBrand === 'All' || product?.brand === selectedBrand;
+      const matchesFormFactor =
+        selectedFormFactor === 'All' || detectPartFormFactor(product) === selectedFormFactor;
 
-      return matchesSearch && matchesBrand;
+      const itemPrice = Number(product?.price || 0);
+      const matchesMinPrice = minP === null || itemPrice >= minP;
+      const matchesMaxPrice = maxP === null || itemPrice <= maxP;
+
+      return (
+        matchesSearch &&
+        matchesBrand &&
+        matchesFormFactor &&
+        matchesMinPrice &&
+        matchesMaxPrice
+      );
     });
-  }, [catalogProducts, activeTab, searchQuery, selectedBrand]);
+
+    return filtered.sort((a, b) => {
+      const priceA = Number(a?.price || 0);
+      const priceB = Number(b?.price || 0);
+      if (sortBy === 'price-asc') return priceA - priceB;
+      if (sortBy === 'price-desc') return priceB - priceA;
+      if (sortBy === 'rating') return Number(b?.hardware_score || 0) - Number(a?.hardware_score || 0);
+      return 0;
+    });
+  }, [
+    catalogProducts,
+    activeTab,
+    searchQuery,
+    selectedBrand,
+    selectedFormFactor,
+    minPrice,
+    maxPrice,
+    sortBy,
+  ]);
 
   const categoryCounts = useMemo(() => {
     return CATEGORIES.reduce((acc, category) => {
       acc[category] = catalogProducts.filter(
         (product) => normalizeText(product?.category) === normalizeText(category)
       ).length;
-
       return acc;
     }, {});
   }, [catalogProducts]);
 
-  const getPartsByCategory = useCallback(
-    (category) => {
-      return activeProducts
-        .filter((item) => item.category === category && item.stock_status !== 'Sold Out')
-        .sort((a, b) => Number(a.price || 0) - Number(b.price || 0));
-    },
-    [activeProducts]
-  );
+  // Rule-Based Smart Build Assistant Engine
+  const handleRunSmartBuildAssistant = () => {
+    const budget = Math.max(Number(assistantBudget) || 20000, 15000);
+    const inStock = activeProducts.filter(
+      (p) => p.stock_status !== 'Sold Out' && Number(p.price || 0) > 0
+    );
 
-  const pickPart = useCallback(
-    (category, maxPrice, strategy = 'balanced') => {
-      const allParts = getPartsByCategory(category);
-      const list = allParts.filter((item) => Number(item.price || 0) <= maxPrice);
+    if (inStock.length === 0) {
+      setAssistantStatus('Catalog is still loading. Try again in a moment.');
+      return;
+    }
 
-      if (list.length === 0) return allParts[0] || null;
+    const byCat = (cat) =>
+      inStock
+        .filter((p) => normalizeText(p.category) === normalizeText(cat))
+        .sort((a, b) => Number(a.price) - Number(b.price));
 
-      if (strategy === 'bestScore') {
-        return [...list].sort((a, b) => Number(b.hardware_score || 0) - Number(a.hardware_score || 0))[0];
+    const cpus = byCat('Processors');
+    const boards = byCat('Motherboards');
+    const gpus = byCat('Video Cards');
+    const rams = byCat('Memory');
+    const storages = byCat('Storage');
+    const psus = byCat('Power Supplies');
+    const coolers = byCat('CPU Coolers');
+    const cases = byCat('Cases');
+
+    const pickBestWithinCap = (list, cap, preferHighScore = true) => {
+      if (!list || list.length === 0) return null;
+      const affordable = list.filter((item) => Number(item.price) <= cap);
+      if (affordable.length === 0) return list[0];
+      if (preferHighScore) {
+        return [...affordable].sort(
+          (a, b) =>
+            Number(b.hardware_score || 0) - Number(a.hardware_score || 0) ||
+            Number(b.price) - Number(a.price)
+        )[0];
       }
+      return affordable[affordable.length - 1];
+    };
 
-      if (strategy === 'cheapest') {
-        return list[0];
-      }
+    const isOfficeApu =
+      assistantProfile === 'Office/Productivity' && budget <= 28000;
 
-      return list[Math.floor(list.length / 2)] || list[0];
-    },
-    [getPartsByCategory]
-  );
+    const gGpu = Number(dssRules.gamingGpuWeight || 36) / 100;
+    const gCpu = Number(dssRules.gamingCpuWeight || 21) / 100;
+    const cGpu = Number(dssRules.creatorGpuWeight || 29) / 100;
+    const cCpu = Number(dssRules.creatorCpuWeight || 27) / 100;
 
-  const getCompatibleMotherboard = useCallback(
-    (cpu, maxPrice, strategy = 'balanced') => {
-      if (!cpu) return null;
+    const weights =
+      assistantProfile === 'Gaming'
+        ? { cpu: gCpu, gpu: gGpu, board: 0.13, ram: 0.08, storage: 0.08, psu: 0.06, cooler: 0.03, case: 0.05 }
+        : assistantProfile === 'Content Creation'
+        ? { cpu: cCpu, gpu: cGpu, board: 0.14, ram: 0.10, storage: 0.08, psu: 0.05, cooler: 0.03, case: 0.04 }
+        : isOfficeApu
+        ? { cpu: 0.32, gpu: 0.0, board: 0.22, ram: 0.14, storage: 0.12, psu: 0.09, cooler: 0.04, case: 0.07 }
+        : { cpu: 0.24, gpu: 0.31, board: 0.14, ram: 0.09, storage: 0.08, psu: 0.06, cooler: 0.03, case: 0.05 };
 
-      const socket = detectCpuSocket(cpu);
+    const apuPool = cpus.filter((c) => String(c.name).toUpperCase().includes('G'));
+    const chosenCpu =
+      isOfficeApu && apuPool.length > 0
+        ? pickBestWithinCap(apuPool, budget * weights.cpu)
+        : pickBestWithinCap(cpus, budget * weights.cpu);
 
-      const boards = getPartsByCategory('Motherboards').filter((board) => {
-        const boardSocket = detectMotherboardSocket(board);
-        const priceOk = Number(board.price || 0) <= maxPrice;
-        return socket && boardSocket && socket === boardSocket && priceOk;
-      });
+    const targetSocket = detectCpuSocket(chosenCpu) || 'AM4';
 
-      const fallbackBoards = getPartsByCategory('Motherboards').filter(
-        (board) => detectMotherboardSocket(board) === socket
+    const compatibleBoards = boards.filter(
+      (b) => detectMotherboardSocket(b) === targetSocket
+    );
+    const chosenBoard = pickBestWithinCap(
+      compatibleBoards.length > 0 ? compatibleBoards : boards,
+      budget * weights.board
+    );
+
+    const boardMemType =
+      chosenBoard?.memory_type ||
+      getMotherboardProfile(chosenBoard).memoryType ||
+      (targetSocket === 'AM5' ? 'DDR5' : 'DDR4');
+    const compatibleRams = rams.filter(
+      (r) => getRamProfile(r, 2).type === boardMemType
+    );
+    const chosenRam = pickBestWithinCap(
+      compatibleRams.length > 0 ? compatibleRams : rams,
+      budget * weights.ram
+    );
+
+    const chosenGpu = isOfficeApu
+      ? null
+      : pickBestWithinCap(gpus, budget * weights.gpu);
+
+    const ssdPool = storages.filter((s) => !getStorageProfile(s).isHdd);
+    const chosenStorage = pickBestWithinCap(
+      ssdPool.length > 0 ? ssdPool : storages,
+      budget * weights.storage
+    );
+
+    const chosenCooler = pickBestWithinCap(coolers, budget * weights.cooler);
+    const chosenCase = pickBestWithinCap(cases, budget * weights.case);
+
+    const estWatts =
+      getCpuProfile(chosenCpu).watts +
+      getGpuProfile(chosenGpu).watts +
+      Number(dssRules.psuBufferWatts || 120);
+    const minSafeWatts = Math.ceil(estWatts / 50) * 50;
+    const safePsus = psus.filter((p) => getPsuProfile(p).watts >= minSafeWatts);
+    const chosenPsu = pickBestWithinCap(
+      safePsus.length > 0 ? safePsus : psus,
+      Math.max(budget * weights.psu, 2400)
+    );
+
+    const generatedBuild = {
+      Processors: chosenCpu || null,
+      Motherboards: chosenBoard || null,
+      'Video Cards': chosenGpu || null,
+      Memory: chosenRam || null,
+      Storage: chosenStorage || null,
+      'Power Supplies': chosenPsu || null,
+      'CPU Coolers': chosenCooler || null,
+      Cases: chosenCase || null,
+    };
+
+    let runningTotal = Object.values(generatedBuild)
+      .filter(Boolean)
+      .reduce((acc, item) => acc + Number(item.price || 0), 0);
+
+    if (runningTotal > budget && generatedBuild['Video Cards']) {
+      const cheaperGpus = gpus.filter(
+        (g) => Number(g.price) <= Number(generatedBuild['Video Cards'].price) - (runningTotal - budget)
       );
-
-      const pool = boards.length > 0 ? boards : fallbackBoards;
-      if (pool.length === 0) return null;
-
-      if (strategy === 'cheapest') {
-        return [...pool].sort((a, b) => Number(a.price || 0) - Number(b.price || 0))[0];
+      if (cheaperGpus.length > 0) {
+        generatedBuild['Video Cards'] = cheaperGpus[cheaperGpus.length - 1];
       }
+    }
 
-      return [...pool].sort((a, b) => Number(b.hardware_score || 0) - Number(a.hardware_score || 0))[0];
-    },
-    [getPartsByCategory]
-  );
+    runningTotal = Object.values(generatedBuild)
+      .filter(Boolean)
+      .reduce((acc, item) => acc + Number(item.price || 0), 0);
 
-  const getCompatibleMemory = useCallback(
-    (motherboard, maxPrice, strategy = 'balanced') => {
-      const boardMemory = motherboard?.memory_type || '';
+    setSelectedBuild(generatedBuild);
+    setSelectedRamCount(2);
+    setAssistantStatus(
+      `Smart Build generated for ${assistantProfile} (${targetSocket} · ${boardMemType}) — Total: ${peso(runningTotal)} / Target: ${peso(budget)}`
+    );
+  };
 
-      const memoryList = getPartsByCategory('Memory').filter((ram) => {
-        const ramType = getRamProfile(ram).type;
-        const priceOk = Number(ram.price || 0) <= maxPrice;
+  // APK-Ready Quotation Export & D5 Database Storage
+  const handleExportQuotation = async () => {
+    if (selectedItems.length === 0) return;
+    setExportingQuote(true);
 
-        if (!boardMemory) return priceOk;
-        return priceOk && ramType === boardMemory;
-      });
+    const refCode = `BB-${printReferenceId}`;
 
-      const fallbackMemory = getPartsByCategory('Memory').filter((ram) => {
-        const ramType = getRamProfile(ram).type;
-        if (!boardMemory) return true;
-        return ramType === boardMemory;
-      });
+    try {
+      await supabase.from('bytebuild_quotations').insert([
+        {
+          reference_code: refCode,
+          user_id: currentUser ? currentUser.id : null,
+          customer_email: currentUser ? currentUser.email : 'Walk-in / Guest',
+          build_data: selectedBuild,
+          total_price: totalPrice,
+          compatibility_score: compatibilityScore,
+        },
+      ]);
+    } catch (_) {
+      // Fallback gracefully
+    }
 
-      const pool = memoryList.length > 0 ? memoryList : fallbackMemory;
-      if (pool.length === 0) return null;
+    try {
+      const rowsHtml = CATEGORIES.map((cat) => {
+        const item = selectedBuild[cat];
+        if (!item) return '';
+        return `
+          <tr>
+            <td style="padding:8px;border-bottom:1px solid #cbd5e1;font-weight:bold;color:#334155;">${getCategoryLabel(cat)}</td>
+            <td style="padding:8px;border-bottom:1px solid #cbd5e1;color:#0f172a;">${item.name} <span style="color:#64748b;font-size:11px;">(${item.sku_code || item.id})</span></td>
+            <td style="padding:8px;border-bottom:1px solid #cbd5e1;text-align:right;font-family:monospace;font-weight:bold;">${peso(item.price)}</td>
+          </tr>`;
+      }).join('');
 
-      if (strategy === 'cheapest') {
-        return [...pool].sort((a, b) => Number(a.price || 0) - Number(b.price || 0))[0];
-      }
+      const invoiceHtml = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ByteBuild Quotation ${refCode}</title>
+</head>
+<body style="font-family:Arial,sans-serif;max-width:750px;margin:24px auto;padding:20px;color:#0f172a;border:1px solid #cbd5e1;border-radius:8px;">
+  <div style="display:flex;justify-content:space-between;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:16px;">
+    <div>
+      <h1 style="margin:0;font-size:20px;">BYTEBUILD COMPUTER SOLUTIONS</h1>
+      <p style="margin:4px 0 0;font-size:12px;color:#475569;">Quezon City, Metro Manila · Local PH Retail Distributor Quotation</p>
+    </div>
+    <div style="text-align:right;">
+      <strong style="font-size:14px;">OFFICIAL QUOTATION</strong>
+      <p style="margin:4px 0 0;font-family:monospace;font-size:12px;">REF: ${refCode}</p>
+      <p style="margin:2px 0 0;font-size:11px;color:#64748b;">Date: ${printDateString}</p>
+    </div>
+  </div>
+  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <thead>
+      <tr style="background:#f1f5f9;text-align:left;">
+        <th style="padding:8px;border-bottom:2px solid #cbd5e1;">Category</th>
+        <th style="padding:8px;border-bottom:2px solid #cbd5e1;">Component Specification</th>
+        <th style="padding:8px;border-bottom:2px solid #cbd5e1;text-align:right;">Price (PHP)</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+  <div style="margin-top:16px;padding:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+    <div>
+      <div style="font-size:12px;color:#475569;">Compatibility Score: <strong>${compatibilityScore}%</strong> · Est. Load: <strong>${totalSystemWattage}W</strong> (Rec. PSU: ${recommendedPsuWatts}W)</div>
+      <div style="font-size:11px;color:#64748b;margin-top:2px;">12-Month Installment Est.: ${peso(monthlyEstimate)}/mo (VAT Included)</div>
+    </div>
+    <div style="font-size:20px;font-weight:900;color:#1e3a8a;font-family:monospace;">${peso(totalPrice)}</div>
+  </div>
+</body>
+</html>`;
 
-      return [...pool].sort((a, b) => Number(b.hardware_score || 0) - Number(a.hardware_score || 0))[0];
-    },
-    [getPartsByCategory]
-  );
-
-  const getCompatiblePsu = useCallback(
-    (cpu, gpu, maxPrice) => {
-      const requiredPsu = Math.ceil((getCpuProfile(cpu).watts + getGpuProfile(gpu).watts + 120) / 50) * 50;
-
-      const psus = getPartsByCategory('Power Supplies')
-        .filter((item) => {
-          const profile = getPsuProfile(item);
-          return profile.watts >= requiredPsu && Number(item.price || 0) <= maxPrice;
-        })
-        .sort((a, b) => Number(a.price || 0) - Number(b.price || 0));
-
-      if (psus.length > 0) return psus[0];
-
-      return (
-        getPartsByCategory('Power Supplies')
-          .filter((item) => getPsuProfile(item).watts >= requiredPsu)
-          .sort((a, b) => Number(a.price || 0) - Number(b.price || 0))[0] ||
-        pickPart('Power Supplies', maxPrice, 'balanced')
-      );
-    },
-    [getPartsByCategory, pickPart]
-  );
-
-  const createBuildOption = useCallback(
-    (label, budget, strategy) => {
-      const ratios = {
-        budget: { cpu: 0.18, board: 0.13, gpu: 0.28, ram: 0.08, storage: 0.09, psu: 0.09, cooler: 0.05, case: 0.1 },
-        value: { cpu: 0.18, board: 0.12, gpu: 0.35, ram: 0.08, storage: 0.08, psu: 0.09, cooler: 0.04, case: 0.06 },
-        balanced: { cpu: 0.22, board: 0.13, gpu: 0.28, ram: 0.1, storage: 0.09, psu: 0.09, cooler: 0.04, case: 0.05 },
-        upgrade: { cpu: 0.22, board: 0.18, gpu: 0.22, ram: 0.1, storage: 0.08, psu: 0.11, cooler: 0.04, case: 0.05 },
-        productivity: { cpu: 0.25, board: 0.12, gpu: 0.18, ram: 0.13, storage: 0.13, psu: 0.09, cooler: 0.05, case: 0.05 },
-      };
-
-      const r = ratios[strategy];
-
-      const cpu = pickPart('Processors', budget * r.cpu, strategy === 'budget' ? 'cheapest' : 'bestScore');
-      const motherboard = getCompatibleMotherboard(cpu, budget * r.board, strategy === 'budget' ? 'cheapest' : 'bestScore');
-      const memory = getCompatibleMemory(motherboard, budget * r.ram, strategy === 'budget' ? 'cheapest' : 'bestScore');
-      const gpu = pickPart('Video Cards', budget * r.gpu, strategy === 'budget' ? 'cheapest' : 'bestScore');
-      const psu = getCompatiblePsu(cpu, gpu, budget * r.psu);
-
-      const build = {
-        Processors: cpu,
-        Motherboards: motherboard,
-        'Video Cards': gpu,
-        Memory: memory,
-        Storage: pickPart('Storage', budget * r.storage, strategy === 'budget' ? 'cheapest' : 'balanced'),
-        'Power Supplies': psu,
-        'CPU Coolers': pickPart('CPU Coolers', budget * r.cooler, strategy === 'budget' ? 'cheapest' : 'balanced'),
-        Cases: pickPart('Cases', budget * r.case, strategy === 'budget' ? 'cheapest' : 'balanced'),
-      };
-
-      const parts = Object.values(build).filter(Boolean);
-      const total = parts.reduce((sum, item) => sum + Number(item.price || 0), 0);
-
-      const socketOk =
-        build.Processors &&
-        build.Motherboards &&
-        detectCpuSocket(build.Processors) === detectMotherboardSocket(build.Motherboards);
-
-      const memoryOk =
-        !build.Motherboards?.memory_type ||
-        !build.Memory ||
-        build.Motherboards.memory_type === getRamProfile(build.Memory).type;
-
-      const avgScore =
-        parts.length > 0
-          ? Math.round(parts.reduce((sum, item) => sum + Number(item.hardware_score || 60), 0) / parts.length)
-          : 0;
-
-      const descriptions = {
-        budget: 'Lowest practical complete build using compatible platform parts.',
-        value: 'Prioritizes price-to-performance while keeping CPU and motherboard compatible.',
-        balanced: 'Balances CPU, GPU, RAM, storage, and PSU with platform compatibility.',
-        upgrade: 'Spends more on motherboard and PSU for better future upgrade support.',
-        productivity: 'Prioritizes CPU, RAM, and storage for work, school, and multitasking.',
-      };
-
-      return {
-        label,
-        strategy,
-        build,
-        total,
-        score: socketOk && memoryOk ? avgScore : Math.max(avgScore - 30, 0),
-        description: descriptions[strategy],
-        warning:
-          !socketOk
-            ? 'CPU and motherboard socket mismatch detected.'
-            : !memoryOk
-            ? 'Motherboard and RAM type mismatch detected.'
-            : 'All core platform checks passed.',
-      };
-    },
-    [pickPart, getCompatibleMotherboard, getCompatibleMemory, getCompatiblePsu]
-  );
-
-  const smartAssistantOptions = useMemo(() => {
-    const budget = Number(assistantForm.budget || 0);
-
-    return [
-      createBuildOption('Budget Saver Build', budget, 'budget'),
-      createBuildOption('Best Value Build', budget, 'value'),
-      createBuildOption('Balanced Gaming Build', budget, 'balanced'),
-      createBuildOption('Upgrade-Friendly Build', budget, 'upgrade'),
-      createBuildOption('Productivity Build', budget, 'productivity'),
-    ].filter((option) => Object.values(option.build).some(Boolean));
-  }, [assistantForm, createBuildOption]);
-
-  const handleUseSuggestedBuild = (build) => {
-    setSelectedBuild(build);
-    setActivePage('builder');
+      const blob = new Blob([invoiceHtml], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `ByteBuild-Quotation-${refCode}.html`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export Error:', err);
+    } finally {
+      setExportingQuote(false);
+    }
   };
 
   const handleSelectProduct = (product) => {
     const matchedCategory = CATEGORIES.find(
       (category) => normalizeText(category) === normalizeText(product?.category)
     );
-
     if (!matchedCategory) return;
-
     setSelectedBuild((prev) => ({
       ...prev,
       [matchedCategory]: {
@@ -1553,206 +1760,194 @@ export default function App() {
       handleSetExistingPart(category, product);
       return;
     }
-
+    if (inventoryMode === 'preorder' || product.stock_status === 'Pre-Order') {
+      setPreorderModalItem(product);
+      return;
+    }
     handleSelectProduct(product);
   };
 
-  const handleClearBuild = () => setSelectedBuild(INITIAL_BUILD);
+  const handleClearBuild = () => {
+    setSelectedBuild(INITIAL_BUILD);
+    setAssistantStatus('');
+  };
+
   const handleClearExistingPc = () => setExistingPc(INITIAL_EXISTING_PC);
 
-  const tone = useMemo(() => {
-    if (recommendation.tone === 'danger') {
-      return { card: 'border-red-400/40 bg-[#230b0b] text-red-50', badge: 'bg-red-600 text-white', bar: 'bg-[#230b0b]0' };
+  const handleSaveCurrentBuild = async () => {
+    if (!currentUser) {
+      alert('Please sign in or create an account to save your PC build.');
+      setActivePage('login');
+      return;
     }
-
-    if (recommendation.tone === 'warning') {
-      return {
-        card: 'border-amber-400/40 bg-[#1f1605] text-amber-50',
-        badge: 'bg-[#1f1605]0 text-white',
-        bar: 'bg-[#1f1605]0'
-      };
+    if (selectedItems.length === 0) {
+      alert('Your build is empty. Select components first.');
+      return;
     }
-
-    if (recommendation.tone === 'info') {
-      return { card: 'border-cyan-400/35 bg-[#061a33] text-cyan-50', badge: 'bg-blue-600 text-white', bar: 'bg-[#061a33]0' };
+    setSavingBuild(true);
+    try {
+      const buildName = prompt('Enter a name for this build:', `Rig - ${new Date().toLocaleDateString()}`);
+      if (!buildName) {
+        setSavingBuild(false);
+        return;
+      }
+      const { error } = await supabase.from('bytebuild_saved_builds').insert([
+        {
+          user_id: currentUser.id,
+          build_name: buildName,
+          build_data: selectedBuild,
+          total_price: totalPrice,
+          compatibility_score: compatibilityScore,
+        },
+      ]);
+      if (error) throw error;
+      alert('Build saved successfully! View it under your Account tab.');
+      fetchUserData();
+    } catch (err) {
+      alert(`Save error: ${err.message}`);
+    } finally {
+      setSavingBuild(false);
     }
-
-    if (recommendation.tone === 'success') {
-      return { card: 'border-emerald-400/35 bg-[#06251a] text-emerald-50', badge: 'bg-emerald-600 text-white', bar: 'bg-[#06251a]0' };
-    }
-
-    return { card: 'border-cyan-400/15 bg-[#071a33]', badge: 'bg-[#020817] text-white', bar: 'bg-[#0b2447]0' };
-  }, [recommendation.tone]);
-
-  const getStockClasses = (status) => {
-    if (status === 'reference') return 'bg-[#0b2447] text-slate-200 border-cyan-400/15';
-    if (status === 'Pre-Order') return 'bg-[#061a33] text-blue-700 border-blue-200';
-    if (status === 'Sold Out') return 'bg-[#230b0b] text-red-700 border-red-200';
-    return 'bg-[#06251a] text-emerald-700 border-emerald-200';
   };
 
-  const getBrandGradient = (brand) => {
-    const name = String(brand || '').toUpperCase();
-
-    if (name.includes('ASUS')) return 'from-[#083B7A] to-[#061A3D]';
-    if (name.includes('MSI')) return 'from-[#0B63CE] to-[#061A3D]';
-    if (name.includes('GIGABYTE')) return 'from-[#0B63CE] to-[#11BFD7]';
-    if (name.includes('INTEL')) return 'from-[#0B63CE] to-[#083B7A]';
-    if (name.includes('AMD')) return 'from-[#083B7A] to-[#11BFD7]';
-    if (name.includes('DEEPCOOL')) return 'from-[#11BFD7] to-[#061A3D]';
-    if (name.includes('CORSAIR')) return 'from-[#083B7A] to-[#061A3D]';
-    if (name.includes('SEASONIC')) return 'from-[#0B63CE] to-[#061A3D]';
-
-    return 'from-[#083B7A] to-[#061A3D]';
+  const handleLoadSavedBuild = (buildRecord) => {
+    setSelectedBuild(buildRecord.build_data || INITIAL_BUILD);
+    setActivePage('builder');
   };
 
-  const renderPageButton = (page, label) => (
-    <button
-      key={page}
-      onClick={() => setActivePage(page)}
-      className={`px-3 py-2 rounded-lg text-xs font-black uppercase tracking-wide ${
-        activePage === page
-          ? 'bg-[#0B63CE] text-white'
-          : 'text-slate-300 hover:bg-[#0b2447] hover:text-[#16C7E8]'
-      }`}
-    >
-      {label}
-    </button>
-  );
+  const handleDeleteSavedBuild = async (buildId) => {
+    if (!window.confirm('Delete this saved build?')) return;
+    try {
+      const { error } = await supabase.from('bytebuild_saved_builds').delete().eq('id', buildId);
+      if (error) throw error;
+      setSavedBuilds((prev) => prev.filter((b) => b.id !== buildId));
+    } catch (err) {
+      alert(err.message);
+    }
+  };
 
-  const renderProductCard = (product, allowAdd = true, existingCategory = null, keyPrefix = 'product') => {
+  const handlePreorderSubmit = async (e) => {
+    e.preventDefault();
+    if (!preorderModalItem) return;
+    setPreorderSubmitting(true);
+    try {
+      const { error } = await supabase.from('bytebuild_preorder_requests').insert([
+        {
+          user_id: currentUser ? currentUser.id : null,
+          customer_name: preorderForm.customer_name,
+          contact_number: preorderForm.contact_number,
+          email: preorderForm.email || (currentUser ? currentUser.email : ''),
+          product_id: String(preorderModalItem.id || preorderModalItem.sku_code || ''),
+          product_name: preorderModalItem.name,
+          estimated_price: Number(preorderModalItem.price || 0),
+          status: 'Pending Supplier Confirmation',
+        },
+      ]);
+      if (error) throw error;
+      alert(`Pre-order submitted for ${preorderModalItem.name}! ByteBuild staff will contact you once supplier allocation is verified.`);
+      setPreorderModalItem(null);
+      setPreorderForm({ customer_name: '', contact_number: '', email: currentUser?.email || '' });
+      fetchUserData();
+    } catch (err) {
+      alert(`Pre-order failed: ${err.message}`);
+    } finally {
+      setPreorderSubmitting(false);
+    }
+  };
+
+  const renderProductRow = (product, allowAdd = true, existingCategory = null) => {
     const isReference = product.source_type === 'reference';
     const status = isReference ? 'reference' : inventoryMode === 'preorder' ? 'Pre-Order' : product.stock_status || 'In Stock';
+    const formFactorTag = detectPartFormFactor(product);
 
-    let buttonLabel = 'Add';
-
-    if (activePage === 'upgrade' && upgradeMode === 'reference') buttonLabel = 'Owned';
-    if (activePage === 'upgrade' && upgradeMode === 'shop') buttonLabel = 'Upgrade';
-    if (inventoryMode === 'preorder') buttonLabel = 'Pre-Order';
+    let buttonLabel = '+ Add';
+    if (activePage === 'upgrade' && upgradeMode === 'reference') buttonLabel = 'Select Owned';
+    if (activePage === 'upgrade' && upgradeMode === 'shop') buttonLabel = 'Choose Upgrade';
+    if (inventoryMode === 'preorder' || product.stock_status === 'Pre-Order') buttonLabel = 'Pre-Order';
 
     return (
       <div
-        key={`${keyPrefix}-${upgradeMode}-${inventoryMode}-${product.id}`}
-        className="bg-[#071a33] border border-cyan-400/20 rounded-2xl bb-card overflow-visible shadow-[0_12px_35px_rgba(0,0,0,0.35)] hover:shadow-[0_25px_65px_rgba(0,0,0,0.65)] transition-all"
+        key={`row-${product.id}`}
+        className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 hover:border-slate-500 transition-colors flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left"
       >
-        <div className={`h-24 bg-gradient-to-br ${getBrandGradient(product.brand)} p-4 text-white`}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[10px] font-black uppercase tracking-widest bg-[#071a33]/15 px-2 py-1 rounded-full truncate">
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider bg-[#1f293d] text-slate-300 px-2 py-0.5 rounded">
               {product.brand || 'OEM'}
             </span>
-
-            <span className={`text-[10px] font-black px-2 py-1 rounded-full border bg-[#071a33] ${getStockClasses(status)}`}>
-              {isReference ? 'Reference' : status}
+            {formFactorTag !== 'Standard' && (
+              <span className="text-[10px] font-semibold bg-slate-800 text-blue-300 px-2 py-0.5 rounded">
+                {formFactorTag}
+              </span>
+            )}
+            <span className="text-[10px] text-slate-500 font-mono">
+              SKU: {product.sku_code || product.id}
+            </span>
+            <span
+              className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                status === 'In Stock'
+                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
+                  : status === 'Pre-Order'
+                  ? 'bg-blue-950 text-blue-400 border border-blue-800/40'
+                  : status === 'Sold Out'
+                  ? 'bg-red-950 text-red-400 border border-red-800/40'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              {status}
             </span>
           </div>
+
+          <h4
+            onClick={() => setSelectedProduct(product)}
+            className="text-sm font-bold text-white hover:text-blue-400 cursor-pointer truncate"
+          >
+            {product.name}
+          </h4>
+
+          <p className="text-xs text-slate-400 mt-1 line-clamp-1">
+            {product.specs || 'Standard specification'}
+          </p>
         </div>
 
-        <div className="p-4">
-          <p className="text-[10px] bb-category-subtitle">
-            SKU {product.sku_code || product.id || 'N/A'}
-          </p>
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end pt-2 sm:pt-0 border-t sm:border-0 border-[#1f293d]">
+          <div className="text-left sm:text-right">
+            <p className="text-xs text-slate-500">Retail Price</p>
+            <p className="text-base font-black text-white font-mono">
+              {isReference || !product.price ? 'Owned' : peso(product.price)}
+            </p>
+          </div>
 
-          <button
-            onClick={() => setSelectedProduct(product)}
-            className="text-left text-sm font-black text-white leading-snug mt-2 min-h-[44px] line-clamp-2 hover:text-[#16C7E8]"
-          >
-            {product.name || 'Unnamed Product'}
-          </button>
-
-          <div className="mt-5 flex items-end justify-between gap-3">
-            <div>
-              <p className="text-[10px] bb-category-subtitle">
-                {isReference ? 'Status' : 'Price'}
-              </p>
-              <p className="text-2xl font-black text-white">
-                {isReference || !product.price ? 'Owned' : peso(product.price)}
-              </p>
-            </div>
-
-            <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedProduct(product)}
+              className="px-2.5 py-1.5 rounded bg-[#1f293d] hover:bg-slate-700 text-xs font-semibold text-slate-200"
+            >
+              Specs
+            </button>
+            {allowAdd && (
               <button
-                onClick={() => setSelectedProduct(product)}
-                className="px-3 py-2 rounded-xl border border-cyan-400/25 text-[10px] font-black uppercase hover:border-[#0B63CE]"
+                onClick={() => handleUpgradeAction(existingCategory || product.category, product)}
+                className={`px-3.5 py-1.5 rounded text-xs font-bold transition-colors ${
+                  buttonLabel === 'Pre-Order'
+                    ? 'bg-blue-600 hover:bg-blue-500 text-white'
+                    : 'bg-blue-700 hover:bg-blue-600 text-white'
+                }`}
               >
-                Details
+                {buttonLabel}
               </button>
-
-              {allowAdd && (
-                <button
-                  onClick={() => handleUpgradeAction(existingCategory || product.category, product)}
-                  className="px-3 py-2 rounded-xl bg-slate-950 text-white text-[10px] font-black uppercase hover:bg-[#0B63CE]"
-                >
-                  {buttonLabel}
-                </button>
-              )}
-            </div>
+            )}
           </div>
         </div>
       </div>
     );
   };
 
-  const renderCatalogPanel = (mode = 'builder', existingCategory = null) => (
-    <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card shadow-[0_12px_35px_rgba(0,0,0,0.35)] overflow-visible">
-      <div className="p-5 border-b border-cyan-400/15">
-        <div className="flex flex-col lg:flex-row gap-3 lg:items-center lg:justify-between">
-          <div>
-            <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-              {activePage === 'upgrade' && upgradeMode === 'reference'
-                ? 'Current Parts Reference'
-                : activePage === 'upgrade' && upgradeMode === 'shop'
-                ? 'Available Shop Upgrades'
-                : inventoryMode === 'active'
-                ? 'Available Products'
-                : 'Pre-Order Catalog'}
-            </p>
-            <h2 className="text-2xl font-black text-white">{getCategoryLabel(activeTab)}</h2>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full lg:w-[560px]">
-            <input
-              type="text"
-              placeholder="Search model, brand, socket, chipset, or SKU..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full rounded-xl border border-cyan-400/25 bg-[#020817] px-4 py-3 text-sm font-semibold text-white placeholder:text-slate-400 outline-none focus:border-[#16C7E8]"
-            />
-
-            <select
-              value={selectedBrand}
-              onChange={(e) => setSelectedBrand(e.target.value)}
-              className="w-full rounded-xl border border-cyan-400/25 bg-[#020817] px-4 py-3 text-sm font-black text-white outline-none focus:border-[#16C7E8]"
-            >
-              {brandsForActiveCategory.map((brand) => (
-                <option key={brand} value={brand}>
-                  {brand === 'All' ? 'All Brands' : brand}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div className="p-5 bg-[#020817] grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 max-h-[760px] overflow-y-auto">
-        {filteredProducts.length === 0 ? (
-          <div className="col-span-full bg-[#071a33] border-2 border-dashed border-cyan-400/15 rounded-2xl p-12 text-center">
-            <p className="font-black text-slate-400 uppercase tracking-widest text-xs">
-              No products match your filter
-            </p>
-          </div>
-        ) : (
-          filteredProducts.map((product) =>
-            renderProductCard(product, true, existingCategory, mode)
-          )
-        )}
-      </div>
-    </div>
-  );
-
-  const renderCategoryTabs = () => (
-    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+  const renderCategoryNavStrip = () => (
+    <div className="flex gap-2 overflow-x-auto pb-2 border-b border-[#1f293d]">
       {CATEGORIES.map((category) => {
-        const isActive = activeTab === category;
+        const isActive = activeTab === category && activePage !== 'home';
+        const hasSelection = Boolean(selectedBuild[category]);
 
         return (
           <button
@@ -1760,953 +1955,1944 @@ export default function App() {
             onClick={() => {
               setActiveTab(category);
               setSelectedBrand('All');
+              setSelectedFormFactor('All');
               setSearchQuery('');
+              if (activePage === 'home') {
+                setActivePage('products');
+              }
             }}
-            className={`rounded-2xl border p-4 text-left transition-all ${
+            className={`shrink-0 px-3.5 py-2 rounded-lg border text-xs font-bold transition-all flex items-center gap-2 ${
               isActive
-                ? 'bg-slate-950 text-white border-slate-950 shadow-[0_20px_55px_rgba(0,0,0,0.55)]'
-                : 'bg-[#071a33] text-slate-200 border-cyan-400/15 hover:border-[#11BFD7] hover:shadow-[0_16px_45px_rgba(0,0,0,0.45)]'
+                ? 'bg-blue-600 border-blue-500 text-white shadow-sm'
+                : 'bg-[#111827] border-[#1f293d] text-slate-300 hover:border-slate-500 hover:text-white'
             }`}
           >
-            <CategoryIcon category={category} active={isActive} />
-
-            <p className="text-[11px] font-black uppercase tracking-[0.08em] bb-category-title mt-3">
-              {getCategoryLabel(category)}
-            </p>
-
-            <p className="text-[10px] mt-1 bb-category-subtitle">
-              {categoryCounts[category] || 0} items
-            </p>
+            <span>{getCategoryLabel(category)}</span>
+            {hasSelection && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+            )}
+            <span className="text-[10px] text-slate-400">
+              ({categoryCounts[category] || 0})
+            </span>
           </button>
         );
       })}
     </div>
   );
 
-  const renderRecommendationPanel = () => (
-    <div className="space-y-5">
-      <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card shadow-[0_12px_35px_rgba(0,0,0,0.35)] p-5">
-        <div className="flex justify-between mb-2">
-          <p className="text-sm font-black">Build Completion</p>
-          <p className="text-sm font-black">{buildProgress}%</p>
-        </div>
-
-        <div className="h-3 bg-[#0b2447] rounded-full overflow-visible">
-          <div className="h-full bg-[#0B63CE] rounded-full" style={{ width: `${buildProgress}%` }} />
-        </div>
-
-        <div className="mt-5 flex justify-between mb-2">
-          <p className="text-sm font-black">Compatibility Score</p>
-          <p className="text-sm font-black">{compatibilityScore}%</p>
-        </div>
-
-        <div className="h-3 bg-[#0b2447] rounded-full overflow-visible">
-          <div className={`h-full ${tone.bar} rounded-full`} style={{ width: `${compatibilityScore}%` }} />
-        </div>
-      </div>
-
-      <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card shadow-[0_12px_35px_rgba(0,0,0,0.35)] p-5">
-        <p className="text-[11px] font-black uppercase tracking-widest text-blue-600">
-          Estimated Use Case
-        </p>
-        <h3 className="text-2xl font-black mt-2 text-white">{performanceTier.label}</h3>
-        <p className="text-sm text-slate-300 mt-2 leading-relaxed">{performanceTier.description}</p>
-      </div>
-
-      <div className={`border rounded-3xl shadow-[0_12px_35px_rgba(0,0,0,0.35)] p-5 ${tone.card}`}>
-        <div className="flex items-center justify-between gap-3 border-b border-current/10 pb-3">
-          <p className="text-[11px] font-black uppercase tracking-widest">
-            DSS Compatibility Output
-          </p>
-
-          <span className={`text-[10px] font-black uppercase tracking-wider px-3 py-1 rounded-full ${tone.badge}`}>
-            {recommendation.title}
+  const renderSmartBuildAssistantBar = () => (
+    <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left space-y-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1f293d] pb-2.5">
+        <div>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+            Rule-Based Decision Support Module
           </span>
+          <h3 className="text-sm font-bold text-white">
+            Smart Build Assistant (Auto-Configure by Budget & Workload)
+          </h3>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {[25000, 40000, 65000, 95000].map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => setAssistantBudget(preset)}
+              className={`px-2 py-1 rounded text-[10px] font-mono font-bold border ${
+                Number(assistantBudget) === preset
+                  ? 'bg-blue-600 border-blue-500 text-white'
+                  : 'bg-[#0b0f19] border-[#1f293d] text-slate-400 hover:text-white'
+              }`}
+            >
+              {peso(preset)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+        <div className="sm:col-span-4">
+          <label className="text-[11px] text-slate-400 block mb-1 font-semibold">
+            Target Budget (PHP)
+          </label>
+          <input
+            type="number"
+            min="15000"
+            step="1000"
+            value={assistantBudget}
+            onChange={(e) => setAssistantBudget(e.target.value)}
+            className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+          />
         </div>
 
-        <p className="text-sm font-semibold leading-relaxed mt-4 text-slate-100 whitespace-pre-line">
-          {recommendation.summary}
-        </p>
+        <div className="sm:col-span-5">
+          <label className="text-[11px] text-slate-400 block mb-1 font-semibold">
+            Intended Workload Profile
+          </label>
+          <select
+            value={assistantProfile}
+            onChange={(e) => setAssistantProfile(e.target.value)}
+            className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white font-semibold focus:outline-none focus:border-blue-500"
+          >
+            <option value="Gaming">Gaming (GPU & Frame Pacing Priority)</option>
+            <option value="Office/Productivity">Office / Productivity (Cost-Efficient APU/CPU)</option>
+            <option value="Content Creation">Content Creation (Multi-Core & RAM Priority)</option>
+            <option value="Mixed/Balanced">Mixed Dual-Purpose (Balanced Tier Parity)</option>
+          </select>
+        </div>
 
-        {dssIssues.length > 0 && (
-          <div className="mt-4 space-y-3">
-            {dssIssues.map((issue) => (
-              <div key={issue.title} className="bg-[#0b2447] border border-cyan-400/20 rounded-2xl p-3 text-white">
-                <p className="text-xs font-black">{issue.title}</p>
-                <p className="text-xs mt-1">{issue.message}</p>
-                <p className="text-xs mt-1 font-black">Action: {issue.action}</p>
-              </div>
-            ))}
+        <div className="sm:col-span-3">
+          <button
+            type="button"
+            onClick={handleRunSmartBuildAssistant}
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 px-3 rounded text-xs font-bold uppercase tracking-wider transition-colors shadow-sm"
+          >
+            Auto-Generate Rig
+          </button>
+        </div>
+      </div>
+
+      {assistantStatus && (
+        <div className="p-2.5 rounded bg-blue-950/40 border border-blue-800/40 text-xs text-blue-300 font-medium">
+          {assistantStatus}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderCatalogList = (existingCategory = null) => (
+    <div className="space-y-4">
+      <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-3 space-y-3">
+        <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
+          <div className="relative w-full sm:w-80">
+            <input
+              type="text"
+              placeholder="Search model, SKU, socket, specs..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+            />
           </div>
+
+          {activePage !== 'upgrade' && (
+            <div className="flex items-center gap-1 bg-[#0b0f19] p-1 rounded-lg border border-[#1f293d] w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setInventoryMode('active')}
+                className={`flex-1 sm:flex-initial px-3 py-1 rounded text-xs font-bold transition-colors ${
+                  inventoryMode === 'active'
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Active Stock ({activeProducts.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setInventoryMode('preorder')}
+                className={`flex-1 sm:flex-initial px-3 py-1 rounded text-xs font-bold transition-colors ${
+                  inventoryMode === 'preorder'
+                    ? 'bg-blue-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Pre-Order Catalog ({preorderProducts.length})
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-[#1f293d]">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-slate-400">Brand:</span>
+              <select
+                value={selectedBrand}
+                onChange={(e) => setSelectedBrand(e.target.value)}
+                className="bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+              >
+                {brandsForActiveCategory.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {formFactorsForActiveCategory.length > 1 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-400">Form Factor:</span>
+                <select
+                  value={selectedFormFactor}
+                  onChange={(e) => setSelectedFormFactor(e.target.value)}
+                  className="bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+                >
+                  {formFactorsForActiveCategory.map((ff) => (
+                    <option key={ff} value={ff}>
+                      {ff}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-slate-400">Price (₱):</span>
+              <input
+                type="number"
+                placeholder="Min"
+                value={minPrice}
+                onChange={(e) => setMinPrice(e.target.value)}
+                className="w-20 bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+              />
+              <span className="text-slate-600 text-xs">-</span>
+              <input
+                type="number"
+                placeholder="Max"
+                value={maxPrice}
+                onChange={(e) => setMaxPrice(e.target.value)}
+                className="w-20 bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1 text-xs text-white font-mono focus:outline-none focus:border-blue-500"
+              />
+              {(minPrice !== '' || maxPrice !== '' || selectedBrand !== 'All' || selectedFormFactor !== 'All') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMinPrice('');
+                    setMaxPrice('');
+                    setSelectedBrand('All');
+                    setSelectedFormFactor('All');
+                  }}
+                  className="text-[11px] text-blue-400 hover:underline ml-1"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-slate-400">Sort:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-blue-500 font-semibold"
+            >
+              <option value="price-asc">Price: Lowest to Highest</option>
+              <option value="price-desc">Price: Highest to Lowest</option>
+              <option value="rating">Hardware Rating (Score)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {filteredProducts.length === 0 ? (
+          <div className="p-8 text-center border border-dashed border-[#1f293d] rounded-lg text-slate-500 text-xs">
+            No components found matching your current filter criteria.
+          </div>
+        ) : (
+          filteredProducts.map((p) => renderProductRow(p, true, existingCategory))
         )}
       </div>
     </div>
   );
 
   const renderBuildSummary = () => (
-    <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card shadow-[0_12px_35px_rgba(0,0,0,0.35)] p-5">
-      <div className="flex items-center justify-between border-b border-cyan-400/10 pb-4">
-        <div>
-          <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-            Quote Summary
-          </p>
-          <h2 className="text-xl font-black text-white">Selected Upgrade Parts</h2>
+    <div
+      id="printable-quotation"
+      className="bg-[#111827] border border-[#1f293d] rounded-lg p-4"
+    >
+      <div className="hidden print:block mb-4 border-b-2 border-slate-900 pb-3">
+        <div className="flex justify-between items-start">
+          <div>
+            <h1 className="text-lg font-black tracking-tight text-slate-900 uppercase">
+              BYTEBUILD COMPUTER SOLUTIONS
+            </h1>
+            <p className="text-[8pt] text-slate-600">
+              Quezon City, Metro Manila · Local PH Retail Distributor Quotation
+            </p>
+          </div>
+          <div className="text-right">
+            <h2 className="text-sm font-black text-slate-900 uppercase">
+              OFFICIAL QUOTATION
+            </h2>
+            <p className="text-[8pt] font-mono text-slate-600">
+              REF: BB-{printReferenceId}
+            </p>
+            <p className="text-[8pt] text-slate-500">Date: {printDateString}</p>
+          </div>
         </div>
-
-        <button
-          onClick={handleClearBuild}
-          className="text-xs bb-category-subtitle"
-        >
-          Clear
-        </button>
       </div>
 
-      <div className="mt-5 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1f293d] pb-3 mb-3 print:hidden">
+        <div>
+          <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+            System Manifest
+          </h3>
+          <p className="text-[10px] text-slate-400">
+            {selectedItems.length} of 8 components configured
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={handleSaveCurrentBuild}
+            disabled={savingBuild || selectedItems.length === 0}
+            className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[11px] font-bold disabled:opacity-40"
+          >
+            {savingBuild ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={handleExportQuotation}
+            disabled={exportingQuote || selectedItems.length === 0}
+            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-bold disabled:opacity-40"
+            title="Download quotation file & log to database"
+          >
+            {exportingQuote ? 'Exporting...' : 'Export'}
+          </button>
+          <button
+            onClick={() => window.print()}
+            disabled={selectedItems.length === 0}
+            className="px-2.5 py-1 bg-blue-700 hover:bg-blue-600 text-white rounded text-[11px] font-bold disabled:opacity-40"
+          >
+            Print
+          </button>
+          <button
+            onClick={handleClearBuild}
+            className="px-2 py-1 text-slate-400 hover:text-white text-[11px]"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-1.5 print-table-wrapper">
+        <div className="hidden print:table-row bg-slate-100 border-b border-slate-300 text-[8pt] font-black uppercase text-slate-700">
+          <div className="table-cell p-2 text-left w-2/3">Component Specification</div>
+          <div className="table-cell p-2 text-right w-1/3">Amount (PHP)</div>
+        </div>
+
         {CATEGORIES.map((category) => {
           const item = selectedBuild[category];
+          const isMemory = category === 'Memory';
+          const printRowClass = !item ? 'print:hidden' : '';
 
           return (
             <div
               key={category}
-              className={`rounded-2xl border p-4 ${
-                item ? 'bg-[#0b2447] border-cyan-400/25' : 'bg-[#071a33] border-dashed border-cyan-400/15'
-              }`}
+              className={`p-2 rounded border border-[#1f293d] bg-[#0b0f19] flex items-center justify-between text-left print-table-row ${printRowClass}`}
             >
-              <div className="flex justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[10px] bb-category-subtitle">
-                    {getCategoryLabel(category)}
-                  </p>
-
-                  <p className={`mt-1 text-sm font-black truncate ${item ? 'text-white' : 'text-slate-400 italic'}`}>
-                    {item ? item.name : `No ${getCategoryLabel(category).toLowerCase()} selected`}
-                  </p>
+              <div className="min-w-0 flex-1 pr-2 print-cell-name">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase">
+                    {getCategoryLabel(category)}:
+                  </span>
+                  {isMemory && item && (
+                    <div className="flex items-center gap-1 bg-[#111827] px-1 py-0.5 rounded print:hidden">
+                      {[1, 2, 4].map((count) => (
+                        <button
+                          key={count}
+                          onClick={() => setSelectedRamCount(count)}
+                          className={`px-1 text-[9px] font-bold rounded ${
+                            selectedRamCount === count
+                              ? 'bg-blue-600 text-white'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {count}x
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
-                {item ? (
+                <p className="text-xs font-semibold text-white truncate mt-0.5">
+                  {item ? item.name : <span className="text-slate-500 italic">Unassigned</span>}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0 print-cell-price">
+                <span className="text-xs font-mono font-bold text-slate-200 print-price">
+                  {item ? (item.price ? peso(item.price) : 'Included') : '--'}
+                </span>
+                {item && (
                   <button
                     onClick={() =>
-                      setSelectedBuild((prev) => ({
-                        ...prev,
-                        [category]: null,
-                      }))
+                      setSelectedBuild((prev) => ({ ...prev, [category]: null }))
                     }
-                    className="shrink-0 text-slate-400 hover:text-rose-600 font-black"
+                    className="text-slate-500 hover:text-red-400 font-bold px-1 print:hidden"
                   >
                     ×
                   </button>
-                ) : (
-                  <span className="shrink-0 text-[10px] font-black text-slate-300">
-                    EMPTY
-                  </span>
                 )}
               </div>
-
-              {item && (
-                <div className="mt-3 flex items-center justify-between">
-                  <span className={`text-[10px] font-black px-2 py-1 rounded-full border ${getStockClasses(item.stock_status)}`}>
-                    {item.stock_status || 'In Stock'}
-                  </span>
-
-                  <span className="text-sm font-black">{item.price ? peso(item.price) : 'Owned'}</span>
-                </div>
-              )}
             </div>
           );
         })}
       </div>
 
-      <div className="mt-5 bg-[#061A3D] text-white rounded-2xl p-5">
-        <div className="flex justify-between items-end">
-          <div>
-            <p className="text-[10px] bb-category-subtitle">
-              Upgrade Total
-            </p>
-            <p className="text-[11px] text-[#11BFD7] font-bold mt-1">
-              VAT included estimate
-            </p>
+      <div className="mt-4 pt-3 border-t border-[#1f293d] print-summary-box">
+        <div className="mb-3 p-2.5 rounded bg-[#0b0f19] border border-[#1f293d] print:hidden">
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-slate-400 font-bold">Estimated Load:</span>
+            <span className="font-mono text-white font-bold">{totalSystemWattage}W</span>
           </div>
-
-          <p className="text-3xl font-black text-emerald-400">{peso(totalPrice)}</p>
+          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full ${
+                totalSystemWattage > (psuProfile.watts || recommendedPsuWatts)
+                  ? 'bg-red-500'
+                  : 'bg-blue-500'
+              }`}
+              style={{
+                width: `${Math.min(
+                  (totalSystemWattage / (psuProfile.watts || 650)) * 100,
+                  100
+                )}%`,
+              }}
+            ></div>
+          </div>
+          <p className="text-[10px] text-slate-500 mt-1">
+            Target PSU: {recommendedPsuWatts}W minimum
+          </p>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-white/10 flex justify-between">
-          <span className="text-[11px] text-slate-400 font-bold">12-month estimate</span>
-          <span className="text-sm font-black">{peso(monthlyEstimate)}</span>
+        <div className="flex justify-between items-baseline">
+          <div>
+            <p className="text-xs text-slate-400 font-bold">Total Estimate:</p>
+            <p className="text-[10px] text-slate-500">VAT Included · PH Retail</p>
+          </div>
+          <p className="text-xl font-black text-emerald-400 font-mono print-total">
+            {peso(totalPrice)}
+          </p>
+        </div>
+
+        <div className="mt-2 pt-2 border-t border-[#1f293d] flex justify-between text-xs text-slate-400 print:hidden">
+          <span>12-Month Est:</span>
+          <span className="font-mono text-slate-300 font-bold">
+            {peso(monthlyEstimate)}/mo
+          </span>
         </div>
       </div>
     </div>
   );
 
-  const renderOwnedPcSummary = () => (
-    <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card shadow-[0_12px_35px_rgba(0,0,0,0.35)] p-5">
-      <div className="flex items-center justify-between border-b border-cyan-400/10 pb-4">
-        <div>
-          <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-            Customer Current PC
-          </p>
-          <h2 className="text-xl font-black text-white">Owned Parts</h2>
+  const renderRecommendationPanel = () => (
+    <div className="space-y-3">
+      <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5">
+        <div className="flex justify-between text-xs font-bold mb-1.5">
+          <span className="text-slate-400 uppercase tracking-wider text-[10px]">
+            Compatibility Score
+          </span>
+          <span
+            className={
+              compatibilityScore >= 90
+                ? 'text-emerald-400'
+                : compatibilityScore >= 70
+                ? 'text-amber-400'
+                : 'text-red-400'
+            }
+          >
+            {compatibilityScore}%
+          </span>
         </div>
-
-        <button
-          onClick={handleClearExistingPc}
-          className="text-xs bb-category-subtitle"
-        >
-          Clear
-        </button>
+        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+          <div
+            className={`h-full transition-all duration-300 ${
+              compatibilityScore >= 90
+                ? 'bg-emerald-500'
+                : compatibilityScore >= 70
+                ? 'bg-amber-500'
+                : 'bg-red-500'
+            }`}
+            style={{ width: `${compatibilityScore}%` }}
+          ></div>
+        </div>
       </div>
 
-      <div className="mt-5 space-y-3">
-        {CATEGORIES.map((category) => {
-          const item = existingPc[category];
+      <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 text-left">
+        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+          Performance Scoring Module
+        </span>
+        <h4 className="text-sm font-bold text-white mt-0.5">
+          {performanceTier.label}
+        </h4>
+        <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+          {performanceTier.description}
+        </p>
+      </div>
 
-          return (
-            <div
-              key={category}
-              className={`rounded-2xl border p-4 ${
-                item ? 'bg-[#0b2447] border-cyan-100' : 'bg-[#071a33] border-dashed border-cyan-400/15'
-              }`}
-            >
-              <p className="text-[10px] bb-category-subtitle">
-                Current {getCategoryLabel(category)}
-              </p>
-              <p className={`mt-1 text-sm font-black truncate ${item ? 'text-white' : 'text-slate-400 italic'}`}>
-                {item ? item.name : 'Not selected'}
-              </p>
-            </div>
-          );
-        })}
+      <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 text-left">
+        <div className="flex justify-between items-center mb-2.5 pb-2 border-b border-[#1f293d]">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            System Diagnostics
+          </span>
+          <span
+            className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+              recommendation.tone === 'danger'
+                ? 'bg-red-950 text-red-400 border border-red-800/40'
+                : recommendation.tone === 'warning'
+                ? 'bg-amber-950 text-amber-400 border border-amber-800/40'
+                : 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
+            }`}
+          >
+            {recommendation.title}
+          </span>
+        </div>
+
+        {dssIssues.length === 0 ? (
+          <p className="text-xs text-slate-400 leading-relaxed whitespace-pre-line">
+            {recommendation.summary}
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {dssIssues.map((issue) => (
+              <div
+                key={issue.title}
+                className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d] text-xs"
+              >
+                <div className="flex justify-between items-center">
+                  <span className="text-[9px] font-bold uppercase text-slate-500">
+                    {issue.category}
+                  </span>
+                  <span
+                    className={`text-[9px] font-bold uppercase ${
+                      issue.severity === 'critical' ? 'text-red-400' : 'text-amber-400'
+                    }`}
+                  >
+                    {issue.severity}
+                  </span>
+                </div>
+                <p className="font-bold text-slate-200 mt-1">{issue.title}</p>
+                <p className="text-slate-400 text-[11px] mt-0.5">{issue.message}</p>
+                <p className="text-blue-400 text-[11px] mt-1 font-semibold">
+                  Fix: {issue.action}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
 
   const renderHomePage = () => {
-    const currentHero = heroSlides[activeHeroSlide];
-
-    const featured = CATEGORIES.map((category) => {
+    const featuredAssortment = CATEGORIES.map((category) => {
       return activeProducts
-        .filter((product) => product.category === category && product.stock_status !== 'Sold Out')
+        .filter(
+          (p) =>
+            p.category === category &&
+            p.stock_status !== 'Sold Out' &&
+            p.stock_status !== 'Pre-Order'
+        )
         .sort((a, b) => Number(b.hardware_score || 0) - Number(a.hardware_score || 0))[0];
-    })
-      .filter(Boolean)
-      .slice(0, 8);
-
-    const homeBuilds = smartAssistantOptions.slice(0, 4);
+    }).filter(Boolean);
 
     return (
-      <div className="space-y-10">
-        <section className="relative overflow-visible rounded-[2rem] bg-[#061A3D] text-white border border-white/10 shadow-2xl">
-          <div className={`absolute inset-0 bg-gradient-to-br ${currentHero.accent}`}></div>
-          <div className="absolute right-0 top-0 h-full w-1/2 opacity-30 bg-[radial-gradient(circle_at_70%_45%,#53E4FF_0%,transparent_32%)]"></div>
-          <div className={`absolute -right-24 -bottom-24 h-96 w-96 rounded-full ${currentHero.glow} blur-3xl`}></div>
-          <div className="absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#0B3D91]/50 blur-3xl"></div>
-
-          <div className="relative grid grid-cols-1 xl:grid-cols-12 gap-8 p-6 sm:p-10 lg:p-14 min-h-[520px] items-center">
-            <div className="xl:col-span-6 max-w-3xl">
-              <p className="text-[#53E4FF] text-xs font-black uppercase tracking-[0.25em]">
-                {currentHero.eyebrow}
-              </p>
-
-              <h2 className="mt-5 text-4xl sm:text-6xl lg:text-7xl font-black tracking-tight leading-[1.02]">
-                {currentHero.title}
+      <div className="space-y-6">
+        <section className="bg-[#111827] border border-[#1f293d] rounded-lg p-6 sm:p-7 text-left">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="max-w-2xl">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Custom Hardware Configuration & Upgrade Workshop
+                </span>
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                Configure, Upgrade, and Quote Your Next Desktop.
               </h2>
-
-              <p className="mt-6 text-blue-50/90 text-base sm:text-lg leading-relaxed max-w-2xl">
-                {currentHero.body}
+              <p className="text-sm text-slate-400 mt-2 leading-relaxed">
+                Use the Smart Build Assistant to generate budget-matched configurations, validate physical socket pinouts and memory channels, and export formal quotations.
               </p>
-
-              <div className="mt-8 flex flex-wrap gap-3">
+              <div className="mt-5 flex flex-wrap gap-3">
                 <button
-                  onClick={() => setActivePage(currentHero.primaryPage)}
-                  className="bg-[#0B63CE] hover:bg-[#16C7E8] hover:text-white transition-colors px-6 py-4 rounded-2xl font-black shadow-[0_20px_55px_rgba(0,0,0,0.55)] shadow-blue-950/30"
+                  onClick={() => setActivePage('builder')}
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider transition-colors shadow-sm"
                 >
-                  {currentHero.primary}
+                  Launch Smart Builder
                 </button>
-
                 <button
-                  onClick={() => setActivePage(currentHero.secondaryPage)}
-                  className="bg-[#071a33]/10 hover:bg-[#071a33]/15 border border-white/20 px-6 py-4 rounded-2xl font-black transition-colors"
+                  onClick={() => setActivePage('upgrade')}
+                  className="bg-[#0b0f19] hover:bg-slate-800 text-slate-300 border border-[#1f293d] px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider transition-colors"
                 >
-                  {currentHero.secondary}
+                  Run Upgrade Checker
                 </button>
               </div>
             </div>
 
-            <div className="xl:col-span-6">
-              <div key={currentHero.eyebrow} className="relative rounded-[2rem] border border-white/15 bg-[#071a33]/10 backdrop-blur-md p-5 sm:p-6 shadow-2xl bb-hero-slide">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <p className="text-[11px] font-black uppercase tracking-[0.08em] bb-category-title">
-                      {currentHero.badge}
-                    </p>
-                    <h3 className="text-3xl font-black mt-2 text-white">{currentHero.visualTitle}</h3>
-                    <p className="text-sm text-blue-50/80 mt-2 leading-relaxed max-w-md">
-                      {currentHero.visualBody}
-                    </p>
-                  </div>
-
-                  <div className="hidden sm:flex h-20 w-20 rounded-3xl bg-[#53E4FF]/15 border border-[#53E4FF]/30 items-center justify-center text-[#53E4FF]">
-                    <HeroVisualIcon type={currentHero.iconType} />
-                  </div>
-                </div>
-
-                <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {currentHero.features.map(([title, body]) => (
-                    <div key={title} className="rounded-2xl border border-white/10 bg-[#031225]/45 p-4">
-                      <p className="text-sm font-black">{title}</p>
-                      <p className="text-xs text-blue-100/70 mt-1">{body}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="mt-6 rounded-2xl bg-[#031225]/65 border border-white/10 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] uppercase tracking-widest font-black text-[#53E4FF]">{currentHero.bannerLabel}</p>
-                      <p className="text-lg font-black mt-1">{currentHero.bannerText}</p>
-                    </div>
-                    <button
-                      onClick={() => setActivePage(currentHero.primaryPage)}
-                      className="shrink-0 rounded-xl bg-[#071a33] text-white px-4 py-2 text-xs font-black hover:bg-[#53E4FF]"
-                    >
-                      Open
-                    </button>
-                  </div>
-                </div>
+            <div className="hidden lg:grid grid-cols-2 gap-3 shrink-0 w-72">
+              <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
+                <span className="text-[10px] text-slate-500 font-bold uppercase block">In-Stock SKUs</span>
+                <span className="text-lg font-black text-white font-mono">{activeProducts.length} Parts</span>
               </div>
-
-              <div className="mt-5 flex justify-center gap-2">
-                {heroSlides.map((slide, index) => (
-                  <button
-                    key={slide.eyebrow}
-                    onClick={() => setActiveHeroSlide(index)}
-                    className={`h-2.5 rounded-full transition-all ${
-                      activeHeroSlide === index ? 'w-10 bg-[#53E4FF]' : 'w-2.5 bg-[#071a33]/40 hover:bg-[#071a33]/70'
-                    }`}
-                    aria-label={`Go to promo ${index + 1}`}
-                  />
-                ))}
+              <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
+                <span className="text-[10px] text-slate-500 font-bold uppercase block">Validation</span>
+                <span className="text-lg font-black text-blue-400 font-mono">Rule-Based DSS</span>
+              </div>
+              <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
+                <span className="text-[10px] text-slate-500 font-bold uppercase block">Pre-Order SKUs</span>
+                <span className="text-lg font-black text-white font-mono">{preorderProducts.length} Items</span>
+              </div>
+              <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
+                <span className="text-[10px] text-slate-500 font-bold uppercase block">Reference DB</span>
+                <span className="text-lg font-black text-emerald-400 font-mono">{referenceParts.length} Legacy</span>
               </div>
             </div>
           </div>
         </section>
 
         <section>
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.08em] bb-category-title">Shop the catalog</p>
-              <h2 className="text-3xl font-black text-white">Shop by Category</h2>
-            </div>
-            <button onClick={() => setActivePage('products')} className="text-sm font-black text-[#16C7E8] hover:text-[#16C7E8]">
-              View all products
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Browse Components
+            </h3>
+            <button
+              onClick={() => setActivePage('products')}
+              className="text-xs text-blue-400 hover:underline"
+            >
+              Full Inventory ({activeProducts.length}) →
             </button>
           </div>
-
-          {renderCategoryTabs()}
+          {renderCategoryNavStrip()}
         </section>
-
-        <section className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <div className="rounded-[2rem] bg-[#071a33] border border-cyan-400/20 p-6 shadow-[0_12px_35px_rgba(0,0,0,0.35)]">
-            <p className="text-[11px] font-black uppercase tracking-[0.08em] bb-category-title">ByteBuild Advisor</p>
-            <h2 className="text-3xl font-black mt-2 text-white">Need a recommended build?</h2>
-            <p className="text-sm text-slate-300 mt-2 leading-relaxed">
-              Enter a budget and purpose, then generate multiple compatible build options using ByteBuild's rule-based DSS.
-            </p>
-
-            <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <input
-                value={assistantForm.budget}
-                onChange={(e) => setAssistantForm((prev) => ({ ...prev, budget: e.target.value }))}
-                className="rounded-2xl border border-cyan-400/25 px-4 py-3 font-bold outline-none focus:border-[#16C7E8]"
-              />
-              <select
-                value={assistantForm.purpose}
-                onChange={(e) => setAssistantForm((prev) => ({ ...prev, purpose: e.target.value }))}
-                className="rounded-2xl border border-cyan-400/25 px-4 py-3 font-bold bg-[#071a33] outline-none focus:border-[#16C7E8]"
-              >
-                <option>Gaming</option>
-                <option>Office</option>
-                <option>Editing</option>
-                <option>School</option>
-                <option>Streaming</option>
-              </select>
-              <button
-                onClick={() => setActivePage('assistant')}
-                className="rounded-2xl bg-[#0B63CE] text-white px-4 py-3 font-black hover:bg-[#061A3D]"
-              >
-                Generate Build
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-[2rem] bg-[#061A3D] text-white border border-white/10 p-6 shadow-[0_12px_35px_rgba(0,0,0,0.35)] relative overflow-visible">
-            <div className="absolute inset-0 opacity-25 bg-[radial-gradient(circle_at_top_right,#53E4FF,transparent_42%)]"></div>
-            <div className="relative">
-              <p className="text-[11px] font-black uppercase tracking-[0.08em] bb-category-title">Upgrade Checker</p>
-              <h2 className="text-3xl font-black mt-2 text-white">Already have a PC?</h2>
-              <p className="text-sm text-blue-50/80 mt-2 leading-relaxed">
-                Select current components from the reference list and let the system check power, compatibility, bottleneck risk, and upgrade direction.
-              </p>
-              <button
-                onClick={() => setActivePage('upgrade')}
-                className="mt-6 rounded-2xl bg-[#071a33] text-white px-5 py-3 font-black hover:bg-[#53E4FF]"
-              >
-                Check Current PC
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {homeBuilds.length > 0 && (
-          <section>
-            <div className="flex items-center justify-between mb-5">
-              <div>
-                <p className="text-[11px] font-black uppercase tracking-[0.08em] bb-category-title">Suggested packages</p>
-                <h2 className="text-3xl font-black text-white">Featured Builds</h2>
-              </div>
-              <button onClick={() => setActivePage('assistant')} className="text-sm font-black text-[#16C7E8] hover:text-[#16C7E8]">
-                See all builds
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              {homeBuilds.map((option) => (
-                <div key={`home-${option.label}`} className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card p-5 shadow-[0_12px_35px_rgba(0,0,0,0.35)] hover:shadow-[0_20px_55px_rgba(0,0,0,0.55)] transition-all">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-[#16C7E8]">{option.strategy}</p>
-                  <h3 className="text-xl font-black mt-2 text-white">{option.label}</h3>
-                  <p className="text-sm text-slate-300 mt-2 line-clamp-2">{option.description}</p>
-                  <div className="mt-5 flex items-end justify-between gap-3">
-                    <div>
-                      <p className="text-[10px] bb-category-subtitle">Estimated Total</p>
-                      <p className="text-2xl font-black text-white">{peso(option.total)}</p>
-                    </div>
-                    <button
-                      onClick={() => handleUseSuggestedBuild(option.build)}
-                      className="rounded-xl bg-[#061A3D] text-white px-4 py-2 text-xs font-black hover:bg-[#0B63CE]"
-                    >
-                      Use Build
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
 
         <section>
-          <div className="flex items-center justify-between mb-5">
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.08em] bb-category-title">Popular picks</p>
-              <h2 className="text-3xl font-black text-white">Featured Products</h2>
-            </div>
-            <button onClick={() => setActivePage('products')} className="text-sm font-black text-[#16C7E8] hover:text-[#16C7E8]">
-              Browse catalog
-            </button>
+          <div className="flex justify-between items-center mb-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 text-left">
+              Featured In-Stock Components
+            </h3>
+            <span className="text-[11px] text-slate-500">
+              Top rated per hardware class
+            </span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {featured.map((product) => renderProductCard(product, true, null, 'featured'))}
-          </div>
-        </section>
-
-        <section className="rounded-[2rem] bg-[#071a33] border border-cyan-400/20 p-8 shadow-[0_12px_35px_rgba(0,0,0,0.35)]">
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            {[
-              ['Smart Recommendations', 'Budget and usage-based build suggestions.'],
-              ['Compatibility First', 'CPU, motherboard, RAM, PSU, cooling, storage, and case validation.'],
-              ['Upgrade Planning', 'Check customer-owned PCs before buying new components.'],
-              ['Quotation Ready', 'Turn selected parts into a clean customer quotation.'],
-            ].map(([title, body]) => (
-              <div key={title} className="rounded-2xl border border-cyan-400/15 p-5">
-                <h3 className="font-black text-[#53E4FF]">{title}</h3>
-                <p className="text-sm text-slate-300 mt-2 leading-relaxed">{body}</p>
+          <div className="space-y-2">
+            {featuredAssortment.length === 0 ? (
+              <div className="p-8 text-center border border-dashed border-[#1f293d] rounded-lg text-slate-500 text-xs">
+                Loading hardware catalog...
               </div>
-            ))}
+            ) : (
+              featuredAssortment.map((p) => renderProductRow(p, true))
+            )}
           </div>
         </section>
       </div>
     );
   };
 
-  const renderProductsPage = () => (
-    <div className="space-y-6">
-      {activePage !== 'upgrade' && (
-        <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card p-5 flex flex-col sm:flex-row gap-3">
-          <button
-            onClick={() => setInventoryMode('active')}
-            className={`flex-1 rounded-2xl px-5 py-4 text-left border ${
-              inventoryMode === 'active'
-                ? 'bg-[#0B63CE] text-white border-[#0B63CE]'
-                : 'bg-[#071a33] text-slate-200 border-cyan-400/15'
-            }`}
-          >
-            <p className="text-sm font-black uppercase">Available Products</p>
-            <p className="text-xs opacity-80 mt-1">{activeProducts.length} active items</p>
-          </button>
-
-          <button
-            onClick={() => setInventoryMode('preorder')}
-            className={`flex-1 rounded-2xl px-5 py-4 text-left border ${
-              inventoryMode === 'preorder'
-                ? 'bg-blue-700 text-white border-blue-700'
-                : 'bg-[#071a33] text-slate-200 border-cyan-400/15'
-            }`}
-          >
-            <p className="text-sm font-black uppercase">Pre-Order Products</p>
-            <p className="text-xs opacity-80 mt-1">{preorderProducts.length} high-end items</p>
-          </button>
-        </div>
-      )}
-
-      {renderCategoryTabs()}
-      {renderCatalogPanel('products')}
-    </div>
-  );
-
   const renderBuilderPage = () => (
-    <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <div className="lg:col-span-8 space-y-6">{renderProductsPage()}</div>
+    <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-16 lg:pb-0">
+      <div className="lg:col-span-8 space-y-4">
+        {renderSmartBuildAssistantBar()}
+        {renderCategoryNavStrip()}
+        {renderCatalogList()}
+      </div>
 
-      <aside className="lg:col-span-4 space-y-5 lg:sticky lg:top-28">
+      <aside className="lg:col-span-4 space-y-4 lg:sticky lg:top-20">
         {renderBuildSummary()}
         {renderRecommendationPanel()}
       </aside>
+
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-[#111827] border-t border-[#1f293d] p-3 px-4 flex justify-between items-center mobile-bottom-bar z-40">
+        <div>
+          <p className="text-[10px] text-slate-400 uppercase font-bold">Total Estimate</p>
+          <p className="text-base font-black text-emerald-400 font-mono">
+            {peso(totalPrice)}
+          </p>
+        </div>
+        <button
+          onClick={() =>
+            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
+          }
+          className="bg-blue-600 text-white px-3.5 py-1.5 rounded text-xs font-bold"
+        >
+          View Summary ({selectedItems.length}/8)
+        </button>
+      </div>
     </section>
   );
 
   const renderUpgradePage = () => (
     <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <div className="lg:col-span-8 space-y-6">
-        <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card p-5">
-          <div className="flex justify-between items-center mb-4">
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-                Upgrade Checker
-              </p>
-              <h2 className="text-2xl font-black text-white">Current PC and Upgrade Parts</h2>
-              <p className="text-sm text-slate-400 mt-1">
-                Select owned parts from the reference list, then select available shop upgrades.
-              </p>
-            </div>
+      <div className="lg:col-span-8 space-y-4">
+        <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-2.5 flex gap-2">
+          <button
+            onClick={() => setUpgradeMode('reference')}
+            className={`flex-1 py-2 rounded text-xs font-bold transition-colors ${
+              upgradeMode === 'reference'
+                ? 'bg-blue-600 text-white'
+                : 'bg-[#0b0f19] text-slate-400 hover:text-white'
+            }`}
+          >
+            1. Select Your Current Hardware (Reference DB)
+          </button>
+          <button
+            onClick={() => setUpgradeMode('shop')}
+            className={`flex-1 py-2 rounded text-xs font-bold transition-colors ${
+              upgradeMode === 'shop'
+                ? 'bg-blue-600 text-white'
+                : 'bg-[#0b0f19] text-slate-400 hover:text-white'
+            }`}
+          >
+            2. Choose Shop Upgrades
+          </button>
+        </div>
 
+        {renderCategoryNavStrip()}
+        {renderCatalogList(activeTab)}
+      </div>
+
+      <aside className="lg:col-span-4 space-y-4 lg:sticky lg:top-20">
+        <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left print:hidden">
+          <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#1f293d]">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Your Current Rig
+            </h4>
             <button
               onClick={handleClearExistingPc}
-              className="text-xs bb-category-subtitle"
+              className="text-[11px] text-slate-500 hover:text-white"
             >
-              Clear Owned Parts
+              Reset
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {CATEGORIES.map((category) => (
-              <div key={category} className="border border-cyan-400/15 rounded-2xl p-4">
-                <p className="text-[10px] bb-category-subtitle">
-                  Current {getCategoryLabel(category)}
-                </p>
-                <p className="text-sm font-black mt-1 truncate">
-                  {existingPc[category]?.name || 'Not selected'}
-                </p>
-                <button
-                  onClick={() => {
-                    setUpgradeMode('reference');
-                    setActiveTab(category);
-                    setSelectedBrand('All');
-                    setSearchQuery('');
-                  }}
-                  className="mt-3 text-xs font-black text-[#16C7E8]"
+          <div className="space-y-1.5">
+            {CATEGORIES.map((cat) => {
+              const item = existingPc[cat];
+              const isMemory = cat === 'Memory';
+
+              return (
+                <div
+                  key={cat}
+                  className="p-1.5 rounded bg-[#0b0f19] border border-[#1f293d] text-xs flex justify-between items-center"
                 >
-                  Select owned part
-                </button>
-              </div>
-            ))}
+                  <div className="min-w-0 pr-2">
+                    <span className="text-[9px] text-slate-500 uppercase block">
+                      {getCategoryLabel(cat)}
+                    </span>
+                    <p className="text-white font-semibold truncate text-[11px]">
+                      {item ? item.name : <span className="text-slate-600 italic">Not set</span>}
+                    </p>
+                  </div>
+                  {isMemory && item && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      {[1, 2, 4].map((count) => (
+                        <button
+                          key={count}
+                          onClick={() => setExistingRamCount(count)}
+                          className={`px-1 text-[9px] font-bold rounded ${
+                            existingRamCount === count
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-[#111827] text-slate-400'
+                          }`}
+                        >
+                          {count}x
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
-        <div className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button
-            onClick={() => {
-              setUpgradeMode('reference');
-              setSelectedBrand('All');
-              setSearchQuery('');
-            }}
-            className={`rounded-2xl px-5 py-4 text-left border bb-tab bb-category-card ${
-              upgradeMode === 'reference'
-                ? 'bg-slate-950 text-white border-slate-950'
-                : 'bg-[#071a33] text-slate-200 border-cyan-400/15'
-            }`}
-          >
-            <p className="text-sm font-black uppercase">Current Parts Reference</p>
-            <p className="text-xs opacity-80 mt-1">Select parts the customer already owns</p>
-          </button>
-
-          <button
-            onClick={() => {
-              setUpgradeMode('shop');
-              setSelectedBrand('All');
-              setSearchQuery('');
-            }}
-            className={`rounded-2xl px-5 py-4 text-left border bb-tab bb-category-card ${
-              upgradeMode === 'shop'
-                ? 'bg-[#0B63CE] text-white border-[#0B63CE]'
-                : 'bg-[#071a33] text-slate-200 border-cyan-400/15'
-            }`}
-          >
-            <p className="text-sm font-black uppercase">Available Shop Upgrades</p>
-            <p className="text-xs opacity-80 mt-1">Select parts ByteBuild can sell as upgrades</p>
-          </button>
-        </div>
-
-        {renderCategoryTabs()}
-        {renderCatalogPanel('upgrade', activeTab)}
-      </div>
-
-      <aside className="lg:col-span-4 space-y-5 lg:sticky lg:top-28">
-        {renderOwnedPcSummary()}
         {renderBuildSummary()}
         {renderRecommendationPanel()}
       </aside>
     </section>
   );
 
-  const renderSmartAssistantPage = () => (
-    <div className="space-y-6">
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-4 bg-[#071a33] border border-cyan-400/20 rounded-3xl p-6">
-          <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-            Smart Build Assistant
-          </p>
-          <h2 className="text-3xl font-black mt-2 text-white">Compare build options</h2>
-          <p className="text-sm text-slate-300 mt-2">
-            Generates compatible build variations using socket, RAM type, and PSU checks.
-          </p>
+  // Hidden Administrator Console with PIN Lock & Dedicated Logout Button
+  const renderAdminPage = () => {
+    const isAuthorized = isAdminAccount || adminUnlocked;
 
-          <div className="mt-6 space-y-4">
-            <input
-              value={assistantForm.budget}
-              onChange={(e) =>
-                setAssistantForm((prev) => ({
-                  ...prev,
-                  budget: e.target.value,
-                }))
-              }
-              placeholder="Budget"
-              className="w-full rounded-xl border border-cyan-400/25 bg-[#020817] px-4 py-3 font-semibold text-white placeholder:text-slate-400"
-            />
-
-            <select
-              value={assistantForm.purpose}
-              onChange={(e) =>
-                setAssistantForm((prev) => ({
-                  ...prev,
-                  purpose: e.target.value,
-                }))
-              }
-              className="w-full rounded-xl border border-cyan-400/25 bg-[#020817] px-4 py-3 font-semibold text-white"
+    if (!isAuthorized) {
+      return (
+        <div className="max-w-md mx-auto bg-[#111827] border border-[#1f293d] rounded-lg p-6 text-left">
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+              Restricted Staff Portal
+            </span>
+            <button
+              onClick={() => setActivePage('home')}
+              className="text-xs text-slate-500 hover:text-white"
             >
-              <option>Gaming</option>
-              <option>Office</option>
-              <option>Editing</option>
-              <option>School</option>
-            </select>
-
-            <select
-              value={assistantForm.preference}
-              onChange={(e) =>
-                setAssistantForm((prev) => ({
-                  ...prev,
-                  preference: e.target.value,
-                }))
-              }
-              className="w-full rounded-xl border border-cyan-400/25 bg-[#020817] px-4 py-3 font-semibold text-white"
-            >
-              <option>Best Value</option>
-              <option>AMD Preference</option>
-              <option>Intel Preference</option>
-              <option>Budget First</option>
-            </select>
+              ← Exit
+            </button>
           </div>
-        </div>
-
-        <div className="lg:col-span-8 bg-[#071a33] border border-cyan-400/20 rounded-3xl p-6">
-          <p className="text-[11px] font-black uppercase tracking-widest text-blue-600">
-            Recommendation Variations
+          <h3 className="text-lg font-bold text-white mb-1">
+            Administrator Console Lock
+          </h3>
+          <p className="text-xs text-slate-400 mb-4">
+            Enter the authorized workshop PIN to unlock inventory, reference parts, and rule management.
           </p>
-          <h2 className="text-3xl font-black mt-2 text-white">Suggested Complete Builds</h2>
-          <p className="text-sm text-slate-300 mt-2">
-            Each recommendation is generated with platform compatibility checks before showing it to the customer.
-          </p>
-        </div>
-      </section>
 
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-        {smartAssistantOptions.map((option) => (
-          <div key={option.label} className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card p-6 shadow-[0_12px_35px_rgba(0,0,0,0.35)]">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-                  {option.strategy}
-                </p>
-                <h3 className="text-2xl font-black mt-1 text-white">{option.label}</h3>
-                <p className="text-sm text-slate-300 mt-2">{option.description}</p>
-              </div>
-
-              <div className="text-right shrink-0">
-                <p className="text-[10px] bb-category-subtitle">Total</p>
-                <p className="text-2xl font-black text-white">{peso(option.total)}</p>
-                <p className="text-[10px] bb-category-subtitle">Score {option.score}/100</p>
-              </div>
-            </div>
-
-            <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
-              {CATEGORIES.map((category) => {
-                const part = option.build[category];
-
-                return (
-                  <div key={category} className="border border-cyan-400/15 rounded-2xl p-3">
-                    <p className="text-[10px] bb-category-subtitle">
-                      {getCategoryLabel(category)}
-                    </p>
-                    <p className="text-sm font-black mt-1 line-clamp-2 text-white">
-                      {part?.name || 'No part selected'}
-                    </p>
-                    {part && <p className="text-sm font-black text-[#16C7E8] mt-2">{peso(part.price)}</p>}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="mt-5 border border-cyan-400/15 rounded-2xl p-4 bg-[#0b2447]">
-              <p className="text-[10px] bb-category-subtitle">
-                Compatibility Check
-              </p>
-              <p className="text-sm text-slate-200 mt-2">{option.warning}</p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (adminPinInput === '1234' || adminPinInput.toLowerCase() === 'admin') {
+                setAdminUnlocked(true);
+                setAdminPinInput('');
+              } else {
+                alert('Invalid Administrator PIN.');
+              }
+            }}
+            className="space-y-3"
+          >
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Workshop Admin PIN</label>
+              <input
+                type="password"
+                required
+                autoComplete="off"
+                value={adminPinInput}
+                onChange={(e) => setAdminPinInput(e.target.value)}
+                placeholder="Enter PIN"
+                className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+              />
             </div>
 
             <button
-              onClick={() => handleUseSuggestedBuild(option.build)}
-              className="mt-5 w-full bg-[#061A3D] text-white rounded-xl px-4 py-3 font-black hover:bg-[#0B63CE]"
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded text-xs font-bold uppercase"
             >
-              Use This Build
+              Unlock Console
+            </button>
+          </form>
+        </div>
+      );
+    }
+
+    const currentAdminDataset =
+      adminSection === 'reference'
+        ? referenceParts
+        : adminTableSource === 'preorder'
+        ? preorderProducts
+        : activeProducts;
+
+    const currentAdminTableName =
+      adminSection === 'reference'
+        ? REFERENCE_TABLE
+        : adminTableSource === 'preorder'
+        ? PREORDER_TABLE
+        : ACTIVE_TABLE;
+
+    const filteredAdminItems = currentAdminDataset.filter((item) => {
+      const matchesCat =
+        adminCategoryFilter === 'All' ||
+        normalizeText(item.category) === normalizeText(adminCategoryFilter);
+      const q = normalizeText(adminSearch);
+      const matchesSearch =
+        q === '' ||
+        normalizeText(item.name).includes(q) ||
+        normalizeText(item.brand).includes(q) ||
+        normalizeText(item.socket).includes(q);
+      return matchesCat && matchesSearch;
+    });
+
+    return (
+      <div className="space-y-6 text-left">
+        {/* Top Admin Header with Lock & Exit Admin Button */}
+        <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                ByteBuild System Administrator Console
+              </span>
+              <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-800/40 px-2 py-0.5 rounded font-bold">
+                Unlocked
+              </span>
+            </div>
+            <h2 className="text-xl font-black text-white mt-0.5">
+              Catalog, Reference DB, Compatibility Rules & Quotation Manager
+            </h2>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {[
+              { id: 'catalog', label: `1. Catalog (${activeProducts.length + preorderProducts.length})` },
+              { id: 'reference', label: `2. Reference DB (${referenceParts.length})` },
+              { id: 'rules', label: '3. DSS Rules' },
+              { id: 'quotations', label: '4. Quotations' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setAdminSection(tab.id)}
+                className={`px-3 py-1.5 rounded text-xs font-bold transition-colors ${
+                  adminSection === tab.id
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-[#0b0f19] border border-[#1f293d] text-slate-400 hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+
+            <button
+              type="button"
+              onClick={handleAdminLogout}
+              className="px-3 py-1.5 rounded bg-red-950/80 hover:bg-red-800 text-red-300 border border-red-700/50 text-xs font-bold uppercase transition-colors ml-1"
+            >
+              Lock & Exit Admin
             </button>
           </div>
-        ))}
-      </section>
-    </div>
-  );
-
-  const renderPromosPage = () => (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-      {[
-        ['Free Basic Assembly', 'Complete system builds may qualify for free basic assembly.'],
-        ['Student Budget Build', 'Entry-level package for school, office, and browsing.'],
-        ['Gaming Starter Bundle', 'Recommended CPU, board, RAM, and GPU combo.'],
-        ['SSD + RAM Upgrade', 'For older PCs needing faster boot and smoother multitasking.'],
-        ['Pre-Order High-End Parts', 'Supplier confirmation required before final quotation.'],
-        ['Maintenance Check', 'Optional cleaning and cable management service.'],
-      ].map(([title, body]) => (
-        <div key={title} className="bg-[#071a33] border border-cyan-400/20 rounded-3xl bb-card p-6">
-          <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">Promo</p>
-          <h3 className="text-2xl font-black mt-2 text-white">{title}</h3>
-          <p className="text-sm text-slate-300 mt-2">{body}</p>
         </div>
-      ))}
-    </div>
-  );
 
-  const renderLoginPage = () => (
-    <div className="max-w-xl mx-auto bg-[#071a33] border border-cyan-400/20 rounded-3xl p-8">
-      <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-        Customer Account
-      </p>
-      <h2 className="text-3xl font-black mt-2 text-white">Login</h2>
-      <p className="text-sm text-slate-300 mt-2">
-        Placeholder screen for customer accounts, saved builds, quotation history, and pre-order requests.
-      </p>
+        {/* SECTION 1 & 2: PRODUCT CATALOG & REFERENCE DATABASE CRUD */}
+        {(adminSection === 'catalog' || adminSection === 'reference') && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="lg:col-span-4 bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                {adminSection === 'reference' ? 'D2: Reference Parts Database' : 'D1: Products Database'}
+              </span>
+              <h3 className="text-sm font-bold text-white">
+                {adminSection === 'reference'
+                  ? 'Add Legacy / Reference Component'
+                  : 'Add New Catalog Component'}
+              </h3>
 
-      <div className="mt-6 space-y-4">
-        <input
-          placeholder="Email address"
-          className="w-full rounded-xl border border-cyan-400/25 bg-[#020817] px-4 py-3 font-semibold text-white placeholder:text-slate-400"
-        />
-        <input
-          placeholder="Password"
-          type="password"
-          className="w-full rounded-xl border border-cyan-400/25 bg-[#020817] px-4 py-3 font-semibold text-white placeholder:text-slate-400"
-        />
-        <button className="w-full bg-[#061A3D] text-white rounded-xl px-4 py-3 font-black hover:bg-[#0B63CE]">
-          Sign In
-        </button>
+              <form
+                onSubmit={(e) =>
+                  handleAdminAddItem(e, adminSection === 'reference' ? 'reference' : 'catalog')
+                }
+                className="space-y-2.5 text-xs"
+              >
+                <div>
+                  <label className="text-slate-400 block mb-1">Component Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={newItemForm.name}
+                    onChange={(e) => setNewItemForm((p) => ({ ...p, name: e.target.value }))}
+                    placeholder="e.g. AMD Ryzen 5 5600"
+                    className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Brand</label>
+                    <input
+                      type="text"
+                      value={newItemForm.brand}
+                      onChange={(e) => setNewItemForm((p) => ({ ...p, brand: e.target.value }))}
+                      placeholder="AMD / Intel / MSI"
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">Category</label>
+                    <select
+                      value={newItemForm.category}
+                      onChange={(e) => setNewItemForm((p) => ({ ...p, category: e.target.value }))}
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
+                    >
+                      {CATEGORIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {adminSection === 'catalog' && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-slate-400 block mb-1">Retail Price (PHP) *</label>
+                      <input
+                        type="number"
+                        required
+                        value={newItemForm.price}
+                        onChange={(e) => setNewItemForm((p) => ({ ...p, price: e.target.value }))}
+                        placeholder="7190"
+                        className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 block mb-1">Stock Status</label>
+                      <select
+                        value={newItemForm.stock_status}
+                        onChange={(e) => setNewItemForm((p) => ({ ...p, stock_status: e.target.value }))}
+                        className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
+                      >
+                        <option value="In Stock">In Stock</option>
+                        <option value="Pre-Order">Pre-Order</option>
+                        <option value="Sold Out">Sold Out</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Socket</label>
+                    <input
+                      type="text"
+                      value={newItemForm.socket}
+                      onChange={(e) => setNewItemForm((p) => ({ ...p, socket: e.target.value }))}
+                      placeholder="AM4 / AM5"
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">RAM Std</label>
+                    <input
+                      type="text"
+                      value={newItemForm.memory_type}
+                      onChange={(e) => setNewItemForm((p) => ({ ...p, memory_type: e.target.value }))}
+                      placeholder="DDR4 / DDR5"
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">Score (1-100)</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={newItemForm.hardware_score}
+                      onChange={(e) => setNewItemForm((p) => ({ ...p, hardware_score: e.target.value }))}
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">Technical Specifications</label>
+                  <textarea
+                    rows={2}
+                    value={newItemForm.specs}
+                    onChange={(e) => setNewItemForm((p) => ({ ...p, specs: e.target.value }))}
+                    placeholder="6 Cores / 12 Threads, 65W TDP, PCIe 4.0..."
+                    className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={adminSaving}
+                  className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded font-bold uppercase tracking-wider"
+                >
+                  {adminSaving ? 'Saving to Supabase...' : '+ Insert Record'}
+                </button>
+              </form>
+            </div>
+
+            <div className="lg:col-span-8 bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#1f293d]">
+                <div className="flex items-center gap-2">
+                  {adminSection === 'catalog' && (
+                    <div className="flex bg-[#0b0f19] p-1 rounded border border-[#1f293d]">
+                      <button
+                        type="button"
+                        onClick={() => setAdminTableSource('active')}
+                        className={`px-2.5 py-1 rounded text-xs font-bold ${
+                          adminTableSource === 'active' ? 'bg-blue-600 text-white' : 'text-slate-400'
+                        }`}
+                      >
+                        Active Inventory ({activeProducts.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdminTableSource('preorder')}
+                        className={`px-2.5 py-1 rounded text-xs font-bold ${
+                          adminTableSource === 'preorder' ? 'bg-blue-600 text-white' : 'text-slate-400'
+                        }`}
+                      >
+                        Pre-Order Table ({preorderProducts.length})
+                      </button>
+                    </div>
+                  )}
+                  <select
+                    value={adminCategoryFilter}
+                    onChange={(e) => setAdminCategoryFilter(e.target.value)}
+                    className="bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-xs text-white"
+                  >
+                    <option value="All">All Categories</option>
+                    {CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <input
+                  type="text"
+                  placeholder="Filter records by name or brand..."
+                  value={adminSearch}
+                  onChange={(e) => setAdminSearch(e.target.value)}
+                  className="bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white w-full sm:w-64"
+                />
+              </div>
+
+              <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
+                {filteredAdminItems.map((item) => (
+                  <div
+                    key={`admin-${item.id}`}
+                    className="p-3 rounded bg-[#0b0f19] border border-[#1f293d] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-[#111827] text-blue-400">
+                          {item.category}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          ID: {item.id}
+                        </span>
+                        {item.socket && (
+                          <span className="text-[10px] text-slate-400">
+                            Socket: {item.socket}
+                          </span>
+                        )}
+                      </div>
+                      <p className="font-bold text-white truncate mt-0.5">{item.name}</p>
+                      <p className="text-[11px] text-slate-500 truncate">{item.specs}</p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {adminSection === 'catalog' && (
+                        <>
+                          <span className="font-mono font-bold text-emerald-400">
+                            {peso(item.price)}
+                          </span>
+                          <select
+                            value={item.stock_status || 'In Stock'}
+                            onChange={(e) =>
+                              handleAdminQuickStatusToggle(item, currentAdminTableName, e.target.value)
+                            }
+                            className="bg-[#111827] border border-[#1f293d] rounded px-2 py-1 text-[11px] text-white"
+                          >
+                            <option value="In Stock">In Stock</option>
+                            <option value="Pre-Order">Pre-Order</option>
+                            <option value="Sold Out">Sold Out</option>
+                          </select>
+                        </>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingItem({ ...item, _table: currentAdminTableName })
+                        }
+                        className="px-2.5 py-1 rounded bg-blue-600/20 border border-blue-500/40 text-blue-300 hover:bg-blue-600 hover:text-white font-bold"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAdminDeleteItem(item, currentAdminTableName)}
+                        className="px-2 py-1 rounded text-slate-500 hover:text-red-400 font-bold"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 3: MAINTAIN COMPATIBILITY & RECOMMENDATION RULES (D3) */}
+        {adminSection === 'rules' && (
+          <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 max-w-3xl space-y-4">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                D3: Compatibility & Rule-Based Recommendation Engine
+              </span>
+              <h3 className="text-base font-bold text-white mt-0.5">
+                Configure Deterministic Hardware Validation & Budget Allocation Rules
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">
+                Changes made here immediately govern the Compatibility Engine, Upgrade Checker, and Smart Build Assistant.
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveDssRules} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d]">
+                  <label className="font-bold text-white block mb-1">
+                    PSU Transient Headroom Buffer (Watts)
+                  </label>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    Added to CPU + GPU TDP to compute minimum safe power supply capacity.
+                  </p>
+                  <input
+                    type="number"
+                    value={dssRules.psuBufferWatts}
+                    onChange={(e) =>
+                      setDssRules((r) => ({ ...r, psuBufferWatts: Number(e.target.value) }))
+                    }
+                    className="w-full bg-[#111827] border border-[#1f293d] rounded px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+
+                <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d]">
+                  <label className="font-bold text-white block mb-1">
+                    Minimum Recommended RAM Capacity (GB)
+                  </label>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    Triggers a capacity warning if total installed memory falls below this threshold.
+                  </p>
+                  <input
+                    type="number"
+                    value={dssRules.minRecommendedRamGB}
+                    onChange={(e) =>
+                      setDssRules((r) => ({ ...r, minRecommendedRamGB: Number(e.target.value) }))
+                    }
+                    className="w-full bg-[#111827] border border-[#1f293d] rounded px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+
+                <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d]">
+                  <label className="font-bold text-white block mb-1">
+                    Minimum Primary Storage Baseline (GB)
+                  </label>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    Flags restricted OS/game storage footprint if SSD is smaller than this limit.
+                  </p>
+                  <input
+                    type="number"
+                    value={dssRules.minStorageCapacityGB}
+                    onChange={(e) =>
+                      setDssRules((r) => ({ ...r, minStorageCapacityGB: Number(e.target.value) }))
+                    }
+                    className="w-full bg-[#111827] border border-[#1f293d] rounded px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+
+                <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d]">
+                  <label className="font-bold text-white block mb-1">
+                    Max Allowed CPU-to-GPU Tier Disparity
+                  </label>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    Maximum tier difference before flagging a severe bottleneck alert.
+                  </p>
+                  <input
+                    type="number"
+                    min="1"
+                    max="4"
+                    value={dssRules.maxAllowedTierGap}
+                    onChange={(e) =>
+                      setDssRules((r) => ({ ...r, maxAllowedTierGap: Number(e.target.value) }))
+                    }
+                    className="w-full bg-[#111827] border border-[#1f293d] rounded px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+
+                <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d]">
+                  <label className="font-bold text-white block mb-1">
+                    Smart Builder: Gaming GPU Budget Share (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="20"
+                    max="55"
+                    value={dssRules.gamingGpuWeight}
+                    onChange={(e) =>
+                      setDssRules((r) => ({ ...r, gamingGpuWeight: Number(e.target.value) }))
+                    }
+                    className="w-full bg-[#111827] border border-[#1f293d] rounded px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+
+                <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d]">
+                  <label className="font-bold text-white block mb-1">
+                    Smart Builder: Creator CPU Budget Share (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="15"
+                    max="45"
+                    value={dssRules.creatorCpuWeight}
+                    onChange={(e) =>
+                      setDssRules((r) => ({ ...r, creatorCpuWeight: Number(e.target.value) }))
+                    }
+                    className="w-full bg-[#111827] border border-[#1f293d] rounded px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded font-bold uppercase"
+                >
+                  Save & Apply Rule Parameters
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDssRules(DEFAULT_DSS_RULES);
+                    localStorage.removeItem('bytebuild_dss_rules');
+                  }}
+                  className="px-4 py-2 rounded bg-[#1f293d] text-slate-300 hover:text-white font-bold"
+                >
+                  Reset Defaults
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {/* SECTION 4: REVIEW GENERATED QUOTATIONS (D5) & PRE-ORDER REQUESTS */}
+        {adminSection === 'quotations' && (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
+              <div className="flex justify-between items-center border-b border-[#1f293d] pb-2">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-blue-400">
+                    D5: Quotations Database
+                  </span>
+                  <h3 className="text-sm font-bold text-white">
+                    Generated Customer Quotations ({adminQuotations.length})
+                  </h3>
+                </div>
+                <button
+                  onClick={fetchAdminLogs}
+                  className="text-xs text-blue-400 hover:underline"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {adminQuotations.length === 0 ? (
+                <p className="text-xs text-slate-500 py-6 text-center">
+                  No exported quotations logged yet. Click "Export" in the Builder manifest to log a quotation.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {adminQuotations.map((q) => (
+                    <div
+                      key={q.id}
+                      className="p-3 rounded bg-[#0b0f19] border border-[#1f293d] flex justify-between items-center text-xs"
+                    >
+                      <div>
+                        <span className="font-mono font-bold text-blue-400">
+                          {q.reference_code}
+                        </span>
+                        <p className="text-white font-semibold mt-0.5">
+                          {q.customer_email || 'Walk-in Customer'}
+                        </p>
+                        <p className="text-[11px] text-slate-500">
+                          {new Date(q.created_at).toLocaleString()} · Compatibility: {q.compatibility_score}%
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-mono font-bold text-emerald-400 text-sm">
+                          {peso(q.total_price)}
+                        </p>
+                        <button
+                          onClick={() => {
+                            if (q.build_data) {
+                              setSelectedBuild(q.build_data);
+                              setActivePage('builder');
+                            }
+                          }}
+                          className="text-[11px] text-blue-400 hover:underline mt-1"
+                        >
+                          Inspect Rig →
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
+              <div className="flex justify-between items-center border-b border-[#1f293d] pb-2">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-emerald-400">
+                    Supplier Allocation Queue
+                  </span>
+                  <h3 className="text-sm font-bold text-white">
+                    Customer Pre-Order Inquiries ({adminAllPreorders.length})
+                  </h3>
+                </div>
+              </div>
+
+              {adminAllPreorders.length === 0 ? (
+                <p className="text-xs text-slate-500 py-6 text-center">
+                  No pre-order requests submitted yet.
+                </p>
+              ) : (
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {adminAllPreorders.map((order) => (
+                    <div
+                      key={order.id}
+                      className="p-3 rounded bg-[#0b0f19] border border-[#1f293d] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                    >
+                      <div>
+                        <p className="font-bold text-white">{order.product_name}</p>
+                        <p className="text-slate-400 text-[11px]">
+                          {order.customer_name} · {order.contact_number}
+                        </p>
+                        <p className="font-mono text-emerald-400 font-bold mt-0.5">
+                          {peso(order.estimated_price)}
+                        </p>
+                      </div>
+                      <select
+                        value={order.status || 'Pending Supplier Confirmation'}
+                        onChange={(e) =>
+                          handleAdminUpdatePreorderStatus(order.id, e.target.value)
+                        }
+                        className="bg-[#111827] border border-[#1f293d] rounded px-2 py-1 text-[11px] text-white"
+                      >
+                        <option value="Pending Supplier Confirmation">Pending Supplier</option>
+                        <option value="Allocation Confirmed">Allocation Confirmed</option>
+                        <option value="Ready for Pickup">Ready for Pickup</option>
+                        <option value="Completed">Completed</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Edit Component Modal */}
+        {editingItem && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
+            <div className="bg-[#111827] border border-[#1f293d] max-w-md w-full rounded-lg p-5 shadow-2xl text-left text-white">
+              <div className="flex justify-between items-center border-b border-[#1f293d] pb-2.5 mb-3">
+                <h4 className="text-sm font-bold">Edit Hardware Specification</h4>
+                <button
+                  onClick={() => setEditingItem(null)}
+                  className="text-slate-400 hover:text-white font-bold"
+                >
+                  ×
+                </button>
+              </div>
+
+              <form onSubmit={handleAdminSaveEdit} className="space-y-3 text-xs">
+                <div>
+                  <label className="text-slate-400 block mb-1">Component Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={editingItem.name || ''}
+                    onChange={(e) =>
+                      setEditingItem((prev) => ({ ...prev, name: e.target.value }))
+                    }
+                    className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
+                  />
+                </div>
+
+                {editingItem._table !== REFERENCE_TABLE && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-slate-400 block mb-1">Price (PHP)</label>
+                      <input
+                        type="number"
+                        value={editingItem.price || 0}
+                        onChange={(e) =>
+                          setEditingItem((prev) => ({ ...prev, price: e.target.value }))
+                        }
+                        className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 block mb-1">Stock Status</label>
+                      <select
+                        value={editingItem.stock_status || 'In Stock'}
+                        onChange={(e) =>
+                          setEditingItem((prev) => ({ ...prev, stock_status: e.target.value }))
+                        }
+                        className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
+                      >
+                        <option value="In Stock">In Stock</option>
+                        <option value="Pre-Order">Pre-Order</option>
+                        <option value="Sold Out">Sold Out</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-slate-400 block mb-1">Socket</label>
+                    <input
+                      type="text"
+                      value={editingItem.socket || ''}
+                      onChange={(e) =>
+                        setEditingItem((prev) => ({ ...prev, socket: e.target.value }))
+                      }
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">RAM Type</label>
+                    <input
+                      type="text"
+                      value={editingItem.memory_type || ''}
+                      onChange={(e) =>
+                        setEditingItem((prev) => ({ ...prev, memory_type: e.target.value }))
+                      }
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-400 block mb-1">Score</label>
+                    <input
+                      type="number"
+                      value={editingItem.hardware_score || 75}
+                      onChange={(e) =>
+                        setEditingItem((prev) => ({ ...prev, hardware_score: e.target.value }))
+                      }
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-slate-400 block mb-1">Specifications</label>
+                  <textarea
+                    rows={2}
+                    value={editingItem.specs || ''}
+                    onChange={(e) =>
+                      setEditingItem((prev) => ({ ...prev, specs: e.target.value }))
+                    }
+                    className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditingItem(null)}
+                    className="flex-1 py-1.5 rounded border border-[#1f293d] text-slate-300"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={adminSaving}
+                    className="flex-1 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white font-bold uppercase"
+                  >
+                    {adminSaving ? 'Saving...' : 'Update Record'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
+
+  const renderLoginPage = () => {
+    if (currentUser && authMode !== 'update-password') {
+      return (
+        <div className="max-w-4xl mx-auto space-y-4 text-left">
+          <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 flex justify-between items-center">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Customer Account
+              </span>
+              <h3 className="text-lg font-bold text-white mt-0.5">{currentUser.email}</h3>
+            </div>
+            <button
+              onClick={handleSignOut}
+              className="px-3 py-1.5 border border-red-500/40 text-red-400 hover:bg-red-500/10 rounded text-xs font-bold"
+            >
+              Sign Out
+            </button>
+          </div>
+
+          <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5">
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">
+              Saved Rig Configurations ({savedBuilds.length})
+            </h4>
+
+            {savedBuilds.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4">No saved builds found.</p>
+            ) : (
+              <div className="space-y-2">
+                {savedBuilds.map((b) => (
+                  <div
+                    key={b.id}
+                    className="p-3 rounded bg-[#0b0f19] border border-[#1f293d] flex justify-between items-center"
+                  >
+                    <div>
+                      <p className="text-sm font-bold text-white">{b.build_name}</p>
+                      <p className="text-xs text-slate-500">
+                        {new Date(b.created_at).toLocaleDateString()} · Score: {b.compatibility_score}%
+                      </p>
+                      <p className="text-xs font-mono font-bold text-emerald-400 mt-0.5">
+                        {peso(b.total_price)}
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleLoadSavedBuild(b)}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold"
+                      >
+                        Load
+                      </button>
+                      <button
+                        onClick={() => handleDeleteSavedBuild(b.id)}
+                        className="px-2.5 py-1 text-slate-500 hover:text-red-400 text-xs"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    if (authMode === 'update-password') {
+      return (
+        <div className="max-w-md mx-auto bg-[#111827] border border-[#1f293d] rounded-lg p-6 text-left">
+          <h3 className="text-lg font-bold text-white mb-1">Set New Password</h3>
+          <p className="text-xs text-slate-400 mb-4">
+            Enter your new secure password below to finalize account recovery.
+          </p>
+
+          {authError && (
+            <div className="p-2 mb-3 bg-red-950/60 border border-red-800/40 text-red-300 text-xs rounded">
+              {authError}
+            </div>
+          )}
+
+          <form onSubmit={handleUpdatePassword} className="space-y-3">
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">New Password</label>
+              <input
+                type="password"
+                required
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="At least 6 characters"
+                className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={authLoading}
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded text-xs font-bold uppercase transition-colors"
+            >
+              {authLoading ? 'Updating...' : 'Update Password'}
+            </button>
+          </form>
+        </div>
+      );
+    }
+
+    if (authMode === 'forgot-password') {
+      return (
+        <div className="max-w-md mx-auto bg-[#111827] border border-[#1f293d] rounded-lg p-6 text-left">
+          <h3 className="text-lg font-bold text-white mb-1">Reset Password</h3>
+          <p className="text-xs text-slate-400 mb-4">
+            Enter your account email and we'll send you a secure password reset link.
+          </p>
+
+          {authError && (
+            <div className="p-2 mb-3 bg-red-950/60 border border-red-800/40 text-red-300 text-xs rounded">
+              {authError}
+            </div>
+          )}
+
+          {forgotEmailSent ? (
+            <div className="space-y-4">
+              <div className="p-3 bg-emerald-950/60 border border-emerald-800/40 text-emerald-300 text-xs rounded">
+                Password recovery email sent! Check your inbox for the secure reset link.
+              </div>
+              <button
+                onClick={() => {
+                  setAuthMode('login');
+                  setForgotEmailSent(false);
+                }}
+                className="w-full bg-[#1f293d] hover:bg-slate-700 text-white py-2 rounded text-xs font-bold uppercase transition-colors"
+              >
+                Return to Sign In
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handlePasswordReset} className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Email Address</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="e.g. kenneth@bytebuild.ph"
+                  className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded text-xs font-bold uppercase transition-colors"
+              >
+                {authLoading ? 'Sending Link...' : 'Send Recovery Email'}
+              </button>
+
+              <div className="pt-2 text-center">
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('login')}
+                  className="text-xs text-slate-400 hover:text-white"
+                >
+                  ← Back to Sign In
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-w-md mx-auto bg-[#111827] border border-[#1f293d] rounded-lg p-6 text-left">
+        <h3 className="text-lg font-bold text-white mb-1">
+          {authMode === 'login' ? 'Sign In to Your Account' : 'Register Account'}
+        </h3>
+        <p className="text-xs text-slate-400 mb-4">
+          Save your build history and track distributor pre-orders.
+        </p>
+
+        {authError && (
+          <div className="p-2 mb-3 bg-red-950/60 border border-red-800/40 text-red-300 text-xs rounded">
+            {authError}
+          </div>
+        )}
+
+        <form onSubmit={handleAuthSubmit} className="space-y-3">
+          <div>
+            <label className="text-xs text-slate-400 block mb-1">Email Address</label>
+            <input
+              type="email"
+              required
+              autoComplete="username"
+              value={authEmail}
+              onChange={(e) => setAuthEmail(e.target.value)}
+              className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-xs text-slate-400">Password</label>
+              {authMode === 'login' && (
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('forgot-password')}
+                  className="text-[11px] text-blue-400 hover:underline"
+                >
+                  Forgot password?
+                </button>
+              )}
+            </div>
+            <input
+              type="password"
+              required
+              autoComplete="current-password"
+              value={authPassword}
+              onChange={(e) => setAuthPassword(e.target.value)}
+              className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={authLoading}
+            className="w-full bg-blue-600 hover:bg-blue-500 text-white py-2 rounded text-xs font-bold uppercase transition-colors"
+          >
+            {authLoading ? 'Verifying...' : authMode === 'login' ? 'Sign In' : 'Create Account'}
+          </button>
+        </form>
+
+        <div className="mt-4 pt-3 border-t border-[#1f293d] text-center">
+          <button
+            onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+            className="text-xs text-blue-400 hover:underline"
+          >
+            {authMode === 'login'
+              ? "Don't have an account? Register"
+              : 'Already have an account? Sign In'}
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   const renderProductModal = () => {
     if (!selectedProduct) return null;
-
     const product = selectedProduct;
     const category = product.category;
     const cpu = getCpuProfile(product);
     const gpu = getGpuProfile(product);
-    const ram = getRamProfile(product);
+    const ram = getRamProfile(product, 2);
     const storage = getStorageProfile(product);
     const psu = getPsuProfile(product);
     const cooler = getCoolerProfile(product);
     const pcCase = getCaseProfile(product);
 
-    let generatedNote = 'General component for standard PC builds.';
-
+    let generatedNote = 'Standard hardware specification.';
     if (category === 'Processors') {
-      generatedNote = `${cpu.label}. Socket: ${product.socket || detectCpuSocket(product) || 'Unknown'}. Estimated TDP: ${cpu.watts || product.tdp || 'Unknown'}W.`;
-    }
-
-    if (category === 'Motherboards') {
-      generatedNote = `Motherboard platform. Socket: ${product.socket || detectMotherboardSocket(product) || 'Unknown'}. Chipset: ${product.chipset || 'Unknown'}. Memory type: ${product.memory_type || 'Unknown'}.`;
-    }
-
-    if (category === 'Video Cards') {
-      generatedNote = `${gpu.label}. Estimated board power: ${gpu.watts || product.wattage || 'Unknown'}W.`;
-    }
-
-    if (category === 'Memory') {
-      generatedNote = `Memory kit. Capacity: ${product.capacity || `${ram.capacity || 'Unknown'}GB`}. Type: ${ram.type}.`;
-    }
-
-    if (category === 'Storage') {
-      generatedNote = `Storage device. Capacity: ${product.capacity || 'Unknown'}. Interface: ${product.interface_type || storage.interfaceType}.`;
-    }
-
-    if (category === 'Power Supplies') {
-      generatedNote = `Power supply. Wattage: ${psu.watts || 'Unknown'}W. Efficiency rating detected: ${psu.rating}.`;
-    }
-
-    if (category === 'CPU Coolers') {
-      generatedNote = `${cooler.label}. Check CPU socket support and case clearance before installation.`;
-    }
-
-    if (category === 'Cases') {
-      generatedNote = `PC case. Form factor support: ${product.form_factor || pcCase.formFactor}. Airflow estimate: ${
-        pcCase.airflow ? 'Good airflow design' : 'Check fan support and airflow before high-power builds'
-      }.`;
+      generatedNote = `${cpu.label} · Socket: ${product.socket || detectCpuSocket(product) || 'Unknown'} · TDP: ${cpu.watts || product.tdp || 'Unknown'}W.`;
+    } else if (category === 'Motherboards') {
+      generatedNote = `Platform: ${product.socket || detectMotherboardSocket(product) || 'Unknown'} · Chipset: ${product.chipset || 'Unknown'} · Memory: ${product.memory_type || 'Unknown'}.`;
+    } else if (category === 'Video Cards') {
+      generatedNote = `${gpu.label} · Board Power: ${gpu.watts || product.wattage || 'Unknown'}W.`;
+    } else if (category === 'Memory') {
+      generatedNote = `Kit Capacity: ${product.capacity || `${ram.perStickCapacity || 'Unknown'}GB per stick`} · Type: ${ram.type}.`;
+    } else if (category === 'Storage') {
+      generatedNote = `Device: ${product.capacity || 'Unknown'} · Interface: ${product.interface_type || storage.driveClass}.`;
+    } else if (category === 'Power Supplies') {
+      generatedNote = `Wattage: ${psu.watts || 'Unknown'}W · Certification: ${psu.rating}.`;
+    } else if (category === 'CPU Coolers') {
+      generatedNote = `${cooler.label} · Verify socket support before assembly.`;
+    } else if (category === 'Cases') {
+      generatedNote = `Form Factor: ${product.form_factor || pcCase.formFactor} · Airflow: ${pcCase.airflow ? 'High Airflow' : 'Standard'}.`;
     }
 
     return (
-      <div className="fixed inset-0 bg-black/50 z-[100] flex items-center justify-center p-4">
-        <div className="bg-[#071a33] border border-cyan-400/20 max-w-3xl w-full rounded-3xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto text-white">
-          <div className="flex justify-between gap-4 border-b border-cyan-400/10 pb-4">
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+        <div className="bg-[#111827] border border-[#1f293d] max-w-xl w-full rounded-lg p-5 shadow-2xl text-left text-white">
+          <div className="flex justify-between items-start border-b border-[#1f293d] pb-3">
             <div>
-              <p className="text-[11px] font-black uppercase tracking-widest text-[#16C7E8]">
-                Product Details
-              </p>
-              <h2 className="text-2xl font-black mt-1 text-white">{product.name}</h2>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                {getCategoryLabel(product.category)} Specification
+              </span>
+              <h3 className="text-base font-bold text-white mt-0.5">{product.name}</h3>
             </div>
             <button
               onClick={() => setSelectedProduct(null)}
-              className="text-2xl font-black text-slate-400 hover:text-red-600"
+              className="text-slate-400 hover:text-white font-bold text-lg"
             >
               ×
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
-            {[
-              ['Brand', product.brand || 'OEM'],
-              ['Category', getCategoryLabel(product.category)],
-              ['Hardware Score', `${product.hardware_score || 70}/100`],
-              ['Price', product.price ? peso(product.price) : 'Reference Part'],
-              ['Socket', product.socket || 'N/A'],
-              ['Chipset', product.chipset || 'N/A'],
-              ['Memory Type', product.memory_type || 'N/A'],
-              ['Form Factor', product.form_factor || 'N/A'],
-              ['Wattage', product.wattage ? `${product.wattage}W` : 'N/A'],
-              ['TDP', product.tdp ? `${product.tdp}W` : 'N/A'],
-              ['Capacity', product.capacity || 'N/A'],
-              ['Interface', product.interface_type || 'N/A'],
-            ].map(([label, value]) => (
-              <div key={label} className="border border-cyan-400/15 rounded-2xl p-4">
-                <p className="text-[10px] bb-category-subtitle">{label}</p>
-                <p className="font-black mt-1">{value}</p>
-              </div>
-            ))}
+          <div className="grid grid-cols-2 gap-2.5 my-4 text-xs">
+            <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d]">
+              <span className="text-[10px] text-slate-500 uppercase block">Brand</span>
+              <span className="font-bold text-white">{product.brand || 'OEM'}</span>
+            </div>
+            <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d]">
+              <span className="text-[10px] text-slate-500 uppercase block">Price</span>
+              <span className="font-bold text-emerald-400 font-mono">
+                {product.price ? peso(product.price) : 'Reference Part'}
+              </span>
+            </div>
+            <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d]">
+              <span className="text-[10px] text-slate-500 uppercase block">Hardware Rating</span>
+              <span className="font-bold text-white">{product.hardware_score || 75}/100</span>
+            </div>
+            <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d]">
+              <span className="text-[10px] text-slate-500 uppercase block">Form Factor / Socket</span>
+              <span className="font-bold text-white">
+                {product.socket || detectPartFormFactor(product)}
+              </span>
+            </div>
           </div>
 
-          <div className="mt-5 border border-cyan-400/15 rounded-2xl p-4">
-            <p className="text-[10px] bb-category-subtitle">Specifications</p>
-            <p className="text-sm text-slate-200 mt-2 whitespace-pre-line">
-              {product.specs || generatedNote}
-            </p>
-          </div>
-
-          <div className="mt-5 border border-cyan-400/15 rounded-2xl p-4">
-            <p className="text-[10px] bb-category-subtitle">Recommended Pairing</p>
-            <p className="text-sm text-slate-200 mt-2 whitespace-pre-line">
-              {product.recommended_pairing ||
-                'Pair with compatible motherboard, 16GB RAM minimum, SSD storage, and PSU based on total system power requirement.'}
-            </p>
-          </div>
-
-          <div className="mt-5 border border-cyan-400/15 rounded-2xl p-4">
-            <p className="text-[10px] bb-category-subtitle">Notes</p>
-            <p className="text-sm text-slate-200 mt-2 whitespace-pre-line">
-              {product.notes || 'No additional notes available.'}
-            </p>
+          <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d] text-xs text-slate-300">
+            <span className="text-[10px] text-slate-500 uppercase block mb-1 font-bold">
+              Technical Description
+            </span>
+            {product.specs || generatedNote}
           </div>
         </div>
       </div>
     );
   };
 
-  const renderFooter = () => (
-    <footer className="mt-16 bg-[#061A3D] text-white">
-      <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-12 grid grid-cols-1 md:grid-cols-4 gap-10">
-        <div>
-          <h3 className="font-black uppercase mb-4">Customer Service</h3>
-          <p className="text-sm text-blue-100">Help Center</p>
-          <p className="text-sm text-blue-100 mt-2">Build Inquiry</p>
-          <p className="text-sm text-blue-100 mt-2">Warranty Assistance</p>
-          <p className="text-sm text-blue-100 mt-2">Return Policy</p>
-        </div>
+  const renderPreorderModal = () => {
+    if (!preorderModalItem) return null;
+    return (
+      <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+        <div className="bg-[#111827] border border-[#1f293d] max-w-md w-full rounded-lg p-5 shadow-2xl text-left text-white">
+          <div className="flex justify-between items-start border-b border-[#1f293d] pb-3">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+                Supplier Pre-Order Allocation
+              </span>
+              <h3 className="text-base font-bold text-white mt-0.5">{preorderModalItem.name}</h3>
+            </div>
+            <button
+              onClick={() => setPreorderModalItem(null)}
+              className="text-slate-400 hover:text-white font-bold text-lg"
+            >
+              ×
+            </button>
+          </div>
 
-        <div>
-          <h3 className="font-black uppercase mb-4">My Account</h3>
-          <p className="text-sm text-blue-100">Login / Register (Future)</p>
-          <p className="text-sm text-blue-100 mt-2">Saved Builds (Future)</p>
-          <p className="text-sm text-blue-100 mt-2">Quotation History</p>
-          <p className="text-sm text-blue-100 mt-2">Pre-Order Requests (Future)</p>
-        </div>
+          <form onSubmit={handlePreorderSubmit} className="mt-4 space-y-3">
+            <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d] flex justify-between items-center text-xs">
+              <span className="text-slate-400 font-bold">Estimated Price:</span>
+              <span className="font-bold text-emerald-400 font-mono text-sm">
+                {peso(preorderModalItem.price)}
+              </span>
+            </div>
 
-        <div>
-          <h3 className="font-black uppercase mb-4">Tools</h3>
-          <p className="text-sm text-blue-100">PC Builder</p>
-          <p className="text-sm text-blue-100 mt-2">Upgrade Checker</p>
-          <p className="text-sm text-blue-100 mt-2">Smart Build Assistant</p>
-          <p className="text-sm text-blue-100 mt-2">Compatibility Check</p>
-        </div>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Customer Full Name</label>
+              <input
+                type="text"
+                required
+                value={preorderForm.customer_name}
+                onChange={(e) => setPreorderForm((prev) => ({ ...prev, customer_name: e.target.value }))}
+                placeholder="e.g. Kenneth Rabang"
+                className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
 
-        <div>
-          <h3 className="font-black uppercase mb-4">ByteBuild</h3>
-          <p className="text-sm text-blue-100">
-            ByteBuild is a small start-up PC shop that provides PC configuration, upgrade advisory, compatibility checking, quotation assistance, and practical hardware recommendations.
-          </p>
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Contact Number</label>
+              <input
+                type="tel"
+                required
+                value={preorderForm.contact_number}
+                onChange={(e) => setPreorderForm((prev) => ({ ...prev, contact_number: e.target.value }))}
+                placeholder="09XX XXX XXXX"
+                className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <div className="pt-2 flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPreorderModalItem(null)}
+                className="flex-1 py-1.5 rounded border border-[#1f293d] text-xs font-bold text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={preorderSubmitting}
+                className="flex-1 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold uppercase transition-colors"
+              >
+                {preorderSubmitting ? 'Logging...' : 'Confirm'}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
-
-      <div className="bg-[#020817] text-slate-300 border-t border-cyan-400/15">
-        <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-5 text-xs flex flex-col sm:flex-row justify-between gap-3">
-          <span>© 2026 ByteBuild. All rights reserved.</span>
-          <span>Terms & Conditions · Privacy Policy · Quality-checked records</span>
-        </div>
-      </div>
-    </footer>
-  );
+    );
+  };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#020817] text-white">
+      <div className="min-h-screen bg-[#0b0f19] text-white flex items-center justify-center">
         <div className="text-center">
-          <div className="w-12 h-12 border-4 border-[#0B63CE] border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-xs bb-category-subtitle">
-            Loading ByteBuild catalog
-          </p>
+          <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+          <p className="text-xs text-slate-500 font-mono">Loading ByteBuild Hardware Inventory...</p>
         </div>
       </div>
     );
@@ -2715,83 +3901,80 @@ export default function App() {
   return (
     <>
       <ByteBuildGlobalStyles />
-      <div className="min-h-screen bg-[#020817] text-white">
-      <header className="bg-[#071a33]/95 backdrop-blur border-b border-cyan-400/15 sticky top-0 z-50">
-        <div className="bg-[#061A3D] text-white text-[11px] font-bold">
-          <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap justify-between gap-2">
-            <span>Rule-based DSS recommendations</span>
-            <span>Compatibility-first PC building</span>
-            <span>Powered by ByteBuild Computer Solutions</span>
-          </div>
-        </div>
-
-        <div className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="h-24 flex items-center justify-between gap-6">
-            <button onClick={() => setActivePage('home')} className="flex items-center gap-3 shrink-0">
-              <img
-                src={bbLogo}
-                alt="ByteBuild Logo"
-                className="h-16 sm:h-20 w-auto max-w-[260px] object-contain"
-              />
+      <div className="min-h-screen bg-[#0b0f19] text-slate-200">
+        <header className="border-b border-[#1f293d] bg-[#111827] sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
+            <button
+              onClick={handleLogoClick}
+              title="ByteBuild Home"
+              className="flex items-center gap-2 select-none"
+            >
+              <img src={bbLogo} alt="ByteBuild Logo" className="h-7 w-auto object-contain" />
+              <span className="text-sm font-black tracking-tight text-white uppercase hidden sm:inline">
+                BYTEBUILD
+              </span>
             </button>
 
-            <nav className="hidden xl:flex items-center gap-2">
-              {renderPageButton('home', 'Home')}
-              {renderPageButton('products', 'Browse Parts')}
-              {renderPageButton('builder', 'Build PC')}
-              {renderPageButton('upgrade', 'Upgrade PC')}
-              {renderPageButton('assistant', 'Recommended Builds')}
-              {renderPageButton('promos', 'Promos')}
+            <nav className="flex items-center gap-1 overflow-x-auto">
+              {[
+                'home',
+                'products',
+                'builder',
+                'upgrade',
+                ...(isAdminAccount || adminUnlocked ? ['admin'] : []),
+              ].map((page) => (
+                <button
+                  key={page}
+                  onClick={() => setActivePage(page)}
+                  className={`px-3 py-1.5 rounded text-xs font-bold uppercase transition-colors ${
+                    activePage === page
+                      ? 'bg-blue-600 text-white'
+                      : page === 'admin'
+                      ? 'text-emerald-400 border border-emerald-800/50 bg-emerald-950/30 hover:bg-emerald-900/40'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {page === 'products'
+                    ? 'Inventory'
+                    : page === 'builder'
+                    ? 'Builder'
+                    : page === 'upgrade'
+                    ? 'Upgrade'
+                    : page === 'admin'
+                    ? 'Admin Console'
+                    : 'Home'}
+                </button>
+              ))}
             </nav>
 
-            <div className="hidden lg:flex items-center gap-3 flex-1 max-w-md">
-              <div className="relative w-full">
-                <input
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    setActivePage('products');
-                  }}
-                  placeholder="Search parts, builds, sockets..."
-                  className="w-full rounded-2xl border border-cyan-400/25 bg-[#020817] px-4 py-3 pr-12 text-sm font-semibold outline-none focus:border-[#16C7E8]"
-                />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[#0B3D91] font-black">⌕</span>
-              </div>
+            <div>
+              <button
+                onClick={() => setActivePage('login')}
+                className="px-3 py-1.5 rounded bg-[#1f293d] hover:bg-slate-700 text-xs font-bold text-white"
+              >
+                {currentUser ? currentUser.email.split('@')[0] : 'Sign In'}
+              </button>
             </div>
-
-            <button
-              onClick={() => setActivePage('login')}
-              className="bg-[#061A3D] text-white px-4 py-3 rounded-2xl text-xs font-black uppercase hover:bg-[#0B63CE]"
-            >
-              Login
-            </button>
           </div>
+        </header>
 
-          <div className="xl:hidden flex gap-2 overflow-x-auto pb-3">
-            {renderPageButton('home', 'Home')}
-            {renderPageButton('products', 'Browse')}
-            {renderPageButton('builder', 'Build')}
-            {renderPageButton('upgrade', 'Upgrade')}
-            {renderPageButton('assistant', 'Builds')}
-            {renderPageButton('promos', 'Promos')}
-          </div>
-        </div>
-      </header>
-
-      <main key={activePage} className="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-8 bg-[#020817] bb-page">
-        {activePage === 'home' && renderHomePage()}
-        {activePage === 'products' && renderProductsPage()}
-        {activePage === 'builder' && renderBuilderPage()}
-        {activePage === 'upgrade' && renderUpgradePage()}
-        {activePage === 'preorder' && renderProductsPage()}
-        {activePage === 'assistant' && renderSmartAssistantPage()}
-        {activePage === 'promos' && renderPromosPage()}
-        {activePage === 'login' && renderLoginPage()}
-      </main>
-
-      {renderFooter()}
-      {renderProductModal()}
+        <main key={activePage} className="max-w-7xl mx-auto px-4 py-6 app-view-container">
+          {activePage === 'home' && renderHomePage()}
+          {activePage === 'products' && (
+            <div className="space-y-4">
+              {renderCategoryNavStrip()}
+              {renderCatalogList()}
+            </div>
+          )}
+          {activePage === 'builder' && renderBuilderPage()}
+          {activePage === 'upgrade' && renderUpgradePage()}
+          {activePage === 'admin' && renderAdminPage()}
+          {activePage === 'login' && renderLoginPage()}
+        </main>
       </div>
+
+      {renderProductModal()}
+      {renderPreorderModal()}
     </>
   );
 }
