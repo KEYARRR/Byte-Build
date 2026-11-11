@@ -49,7 +49,7 @@ const DEFAULT_DSS_RULES = {
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
 
 const peso = (value) =>
-  `₱${Number(value || 0).toLocaleString(undefined, {
+  `\u20B1${Number(value || 0).toLocaleString(undefined, {
     maximumFractionDigits: 0,
   })}`;
 
@@ -409,7 +409,7 @@ function ByteBuildGlobalStyles() {
         margin: 0;
         background: #0b0f19 !important;
         color: #f1f5f9;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
       }
       * {
         box-sizing: border-box;
@@ -418,6 +418,22 @@ function ByteBuildGlobalStyles() {
       select,
       textarea {
         color-scheme: dark;
+      }
+      /* Fix missing Peso symbol (₱) on Android WebViews by using Roboto/Noto Sans with tabular numbers instead of Droid Sans Mono */
+      .font-mono {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif !important;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.01em;
+      }
+      /* Hide horizontal scrollbars on mobile touch strips while keeping swipe active */
+      .no-scrollbar::-webkit-scrollbar {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none !important;
+        scrollbar-width: none !important;
       }
       ::-webkit-scrollbar {
         width: 6px;
@@ -433,16 +449,15 @@ function ByteBuildGlobalStyles() {
       @keyframes appViewTransition {
         0% {
           opacity: 0.94;
-          transform: translateY(6px);
+          transform: translateY(4px);
         }
         100% {
           opacity: 1;
-          transform: translateY(0);
+          transform: none;
         }
       }
       .app-view-container {
-        animation: appViewTransition 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
-        will-change: transform, opacity;
+        animation: appViewTransition 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
       }
       @media print {
         @page {
@@ -520,7 +535,7 @@ function ByteBuildGlobalStyles() {
         #printable-quotation .print-price {
           font-size: 9.5pt !important;
           font-weight: 700 !important;
-          font-family: monospace !important;
+          font-family: sans-serif !important;
           color: #0f172a !important;
           display: inline-block !important;
           min-width: 80px !important;
@@ -544,7 +559,7 @@ function ByteBuildGlobalStyles() {
           color: #1e3a8a !important;
           font-size: 15pt !important;
           font-weight: 900 !important;
-          font-family: monospace !important;
+          font-family: sans-serif !important;
         }
       }
     `}</style>
@@ -587,6 +602,7 @@ export default function App() {
   const [existingPc, setExistingPc] = useState(INITIAL_EXISTING_PC);
   const [loading, setLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [showMobileDrawer, setShowMobileDrawer] = useState(false);
 
   const [existingRamCount, setExistingRamCount] = useState(null);
   const [selectedRamCount, setSelectedRamCount] = useState(2);
@@ -1673,7 +1689,7 @@ export default function App() {
           <tr>
             <td style="padding:8px;border-bottom:1px solid #cbd5e1;font-weight:bold;color:#334155;">${getCategoryLabel(cat)}</td>
             <td style="padding:8px;border-bottom:1px solid #cbd5e1;color:#0f172a;">${item.name} <span style="color:#64748b;font-size:11px;">(${item.sku_code || item.id})</span></td>
-            <td style="padding:8px;border-bottom:1px solid #cbd5e1;text-align:right;font-family:monospace;font-weight:bold;">${peso(item.price)}</td>
+            <td style="padding:8px;border-bottom:1px solid #cbd5e1;text-align:right;font-family:sans-serif;font-weight:bold;">${peso(item.price)}</td>
           </tr>`;
       }).join('');
 
@@ -1710,7 +1726,7 @@ export default function App() {
       <div style="font-size:12px;color:#475569;">Compatibility Score: <strong>${compatibilityScore}%</strong> · Est. Load: <strong>${totalSystemWattage}W</strong> (Rec. PSU: ${recommendedPsuWatts}W)</div>
       <div style="font-size:11px;color:#64748b;margin-top:2px;">12-Month Installment Est.: ${peso(monthlyEstimate)}/mo (VAT Included)</div>
     </div>
-    <div style="font-size:20px;font-weight:900;color:#1e3a8a;font-family:monospace;">${peso(totalPrice)}</div>
+    <div style="font-size:20px;font-weight:900;color:#1e3a8a;font-family:sans-serif;">${peso(totalPrice)}</div>
   </div>
 </body>
 </html>`;
@@ -1944,7 +1960,7 @@ export default function App() {
   };
 
   const renderCategoryNavStrip = () => (
-    <div className="flex gap-2 overflow-x-auto pb-2 border-b border-[#1f293d]">
+    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2.5 pt-0.5 border-b border-[#1f293d]">
       {CATEGORIES.map((category) => {
         const isActive = activeTab === category && activePage !== 'home';
         const hasSelection = Boolean(selectedBuild[category]);
@@ -1991,7 +2007,7 @@ export default function App() {
             Smart Build Assistant (Auto-Configure by Budget & Workload)
           </h3>
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {[25000, 40000, 65000, 95000].map((preset) => (
             <button
               key={preset}
@@ -2475,6 +2491,118 @@ export default function App() {
     </div>
   );
 
+  // True Root-Level Floating Mobile Pill Bar (Never Trapped at Bottom of Page)
+  const renderFloatingMobileBar = () => {
+    if (activePage !== 'builder' && activePage !== 'upgrade') return null;
+
+    return (
+      <div
+        style={{ position: 'fixed', bottom: '14px', left: '12px', right: '12px', zIndex: 85 }}
+        className="lg:hidden bg-[#111827]/95 backdrop-blur-md border border-blue-500/40 rounded-xl p-3 px-4 flex justify-between items-center shadow-[0_10px_30px_rgba(0,0,0,0.85)] mobile-bottom-bar print:hidden"
+      >
+        <div className="text-left">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-slate-300 uppercase font-bold tracking-wider">
+              {activePage === 'upgrade'
+                ? 'Upgrade Cost'
+                : `Total (${selectedItems.length}/8)`}
+            </span>
+            <span
+              className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                compatibilityScore >= 90
+                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-700/40'
+                  : compatibilityScore >= 70
+                  ? 'bg-amber-950 text-amber-400 border border-amber-700/40'
+                  : 'bg-red-950 text-red-400 border border-red-700/40'
+              }`}
+            >
+              DSS: {compatibilityScore}%
+            </span>
+          </div>
+          <p className="text-lg font-black text-emerald-400 font-mono leading-tight mt-0.5">
+            {peso(totalPrice)}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowMobileDrawer(true)}
+          className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wide shadow-md transition-transform shrink-0"
+        >
+          {activePage === 'upgrade' ? 'Inspect Rig ▲' : 'View Build ▲'}
+        </button>
+      </div>
+    );
+  };
+
+  // Instant Slide-Up Mobile Drawer for Manifest & DSS Diagnostics
+  const renderMobileManifestDrawer = () => {
+    if (!showMobileDrawer) return null;
+
+    return (
+      <div className="lg:hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-[90] flex flex-col justify-end print:hidden">
+        <div className="bg-[#0b0f19] border-t border-[#1f293d] rounded-t-2xl max-h-[85vh] flex flex-col shadow-2xl">
+          <div className="p-3.5 px-4 bg-[#111827] border-b border-[#1f293d] rounded-t-2xl flex items-center justify-between shrink-0">
+            <div className="text-left">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">
+                Live Build & DSS Diagnostics
+              </span>
+              <h3 className="text-sm font-black text-white">
+                System Manifest ({selectedItems.length}/8) · Score: {compatibilityScore}%
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowMobileDrawer(false)}
+              className="px-3 py-1.5 rounded-md bg-[#1f293d] hover:bg-slate-700 text-xs font-bold text-white"
+            >
+              Close ✕
+            </button>
+          </div>
+
+          <div className="p-4 overflow-y-auto space-y-4">
+            {activePage === 'upgrade' && (
+              <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 text-left">
+                <div className="flex justify-between items-center mb-2 pb-1.5 border-b border-[#1f293d]">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Your Current Rig
+                  </h4>
+                  <button
+                    onClick={handleClearExistingPc}
+                    className="text-[11px] text-slate-400 hover:text-white"
+                  >
+                    Reset
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {CATEGORIES.map((cat) => {
+                    const item = existingPc[cat];
+                    return (
+                      <div
+                        key={`mob-ex-${cat}`}
+                        className="p-1.5 rounded bg-[#0b0f19] border border-[#1f293d] text-[10px]"
+                      >
+                        <span className="text-slate-500 uppercase block text-[8px]">
+                          {getCategoryLabel(cat)}
+                        </span>
+                        <p className="text-white font-semibold truncate">
+                          {item ? item.name : 'Not set'}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {renderBuildSummary()}
+            {renderRecommendationPanel()}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderHomePage = () => {
     const featuredAssortment = CATEGORIES.map((category) => {
       return activeProducts
@@ -2489,11 +2617,11 @@ export default function App() {
 
     return (
       <div className="space-y-6">
-        <section className="bg-[#111827] border border-[#1f293d] rounded-lg p-6 sm:p-7 text-left">
+        <section className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 sm:p-7 text-left">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="max-w-2xl">
               <div className="flex items-center gap-2 mb-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
                   Custom Hardware Configuration & Upgrade Workshop
                 </span>
@@ -2504,16 +2632,16 @@ export default function App() {
               <p className="text-sm text-slate-400 mt-2 leading-relaxed">
                 Use the Smart Build Assistant to generate budget-matched configurations, validate physical socket pinouts and memory channels, and export formal quotations.
               </p>
-              <div className="mt-5 flex flex-wrap gap-3">
+              <div className="mt-5 flex flex-wrap gap-2.5">
                 <button
                   onClick={() => setActivePage('builder')}
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider transition-colors shadow-sm"
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-md text-xs font-bold uppercase tracking-wider transition-colors shadow-sm"
                 >
                   Launch Smart Builder
                 </button>
                 <button
                   onClick={() => setActivePage('upgrade')}
-                  className="bg-[#0b0f19] hover:bg-slate-800 text-slate-300 border border-[#1f293d] px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider transition-colors"
+                  className="bg-[#0b0f19] hover:bg-slate-800 text-slate-300 border border-[#1f293d] px-4 py-2.5 rounded-md text-xs font-bold uppercase tracking-wider transition-colors"
                 >
                   Run Upgrade Checker
                 </button>
@@ -2581,34 +2709,18 @@ export default function App() {
   };
 
   const renderBuilderPage = () => (
-    <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start pb-16 lg:pb-0">
+    <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       <div className="lg:col-span-8 space-y-4">
         {renderSmartBuildAssistantBar()}
         {renderCategoryNavStrip()}
         {renderCatalogList()}
       </div>
 
-      <aside className="lg:col-span-4 space-y-4 lg:sticky lg:top-20">
+      {/* Desktop Sticky Sidebar (Hidden on Mobile) */}
+      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-24 print:block">
         {renderBuildSummary()}
         {renderRecommendationPanel()}
       </aside>
-
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-[#111827] border-t border-[#1f293d] p-3 px-4 flex justify-between items-center mobile-bottom-bar z-40">
-        <div>
-          <p className="text-[10px] text-slate-400 uppercase font-bold">Total Estimate</p>
-          <p className="text-base font-black text-emerald-400 font-mono">
-            {peso(totalPrice)}
-          </p>
-        </div>
-        <button
-          onClick={() =>
-            window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' })
-          }
-          className="bg-blue-600 text-white px-3.5 py-1.5 rounded text-xs font-bold"
-        >
-          View Summary ({selectedItems.length}/8)
-        </button>
-      </div>
     </section>
   );
 
@@ -2624,7 +2736,7 @@ export default function App() {
                 : 'bg-[#0b0f19] text-slate-400 hover:text-white'
             }`}
           >
-            1. Select Your Current Hardware (Reference DB)
+            1. Select Current Hardware
           </button>
           <button
             onClick={() => setUpgradeMode('shop')}
@@ -2642,7 +2754,8 @@ export default function App() {
         {renderCatalogList(activeTab)}
       </div>
 
-      <aside className="lg:col-span-4 space-y-4 lg:sticky lg:top-20">
+      {/* Desktop Sticky Sidebar */}
+      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-24">
         <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left print:hidden">
           <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#1f293d]">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -3433,7 +3546,7 @@ export default function App() {
                       onChange={(e) =>
                         setEditingItem((prev) => ({ ...prev, memory_type: e.target.value }))
                       }
-                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
                     />
                   </div>
                   <div>
@@ -3444,7 +3557,7 @@ export default function App() {
                       onChange={(e) =>
                         setEditingItem((prev) => ({ ...prev, hardware_score: e.target.value }))
                       }
-                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white font-mono"
+                      className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white font-mono"
                     />
                   </div>
                 </div>
@@ -3902,20 +4015,76 @@ export default function App() {
     <>
       <ByteBuildGlobalStyles />
       <div className="min-h-screen bg-[#0b0f19] text-slate-200">
-        <header className="border-b border-[#1f293d] bg-[#111827] sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
-            <button
-              onClick={handleLogoClick}
-              title="ByteBuild Home"
-              className="flex items-center gap-2 select-none"
-            >
-              <img src={bbLogo} alt="ByteBuild Logo" className="h-7 w-auto object-contain" />
-              <span className="text-sm font-black tracking-tight text-white uppercase hidden sm:inline">
-                BYTEBUILD
-              </span>
-            </button>
+        {/* Responsive Two-Row Mobile / Single-Row Desktop Header */}
+        <header className="border-b border-[#1f293d] bg-[#111827]/95 backdrop-blur sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-3 sm:px-4">
+            <div className="h-14 flex items-center justify-between gap-3">
+              <button
+                onClick={handleLogoClick}
+                title="ByteBuild Home"
+                className="flex items-center gap-2.5 select-none text-left shrink-0"
+              >
+                <img
+                  src={bbLogo}
+                  alt="ByteBuild Logo"
+                  className="h-8 w-auto object-contain"
+                />
+                <div>
+                  <span className="text-sm font-black tracking-tight text-white uppercase block leading-none">
+                    BYTEBUILD
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium block mt-0.5">
+                    PC Builder & DSS
+                  </span>
+                </div>
+              </button>
 
-            <nav className="flex items-center gap-1 overflow-x-auto">
+              {/* Desktop Center Navigation */}
+              <nav className="hidden md:flex items-center gap-1.5">
+                {[
+                  'home',
+                  'products',
+                  'builder',
+                  'upgrade',
+                  ...(isAdminAccount || adminUnlocked ? ['admin'] : []),
+                ].map((page) => (
+                  <button
+                    key={page}
+                    onClick={() => setActivePage(page)}
+                    className={`px-3.5 py-1.5 rounded-md text-xs font-bold uppercase transition-colors ${
+                      activePage === page
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : page === 'admin'
+                        ? 'text-emerald-400 border border-emerald-800/50 bg-emerald-950/30 hover:bg-emerald-900/40'
+                        : 'text-slate-400 hover:text-white hover:bg-[#1f293d]/50'
+                    }`}
+                  >
+                    {page === 'products'
+                      ? 'Inventory'
+                      : page === 'builder'
+                      ? 'Builder'
+                      : page === 'upgrade'
+                      ? 'Upgrade'
+                      : page === 'admin'
+                      ? 'Admin Console'
+                      : 'Home'}
+                  </button>
+                ))}
+              </nav>
+
+              {/* Sign In / Account Pill */}
+              <div className="shrink-0">
+                <button
+                  onClick={() => setActivePage('login')}
+                  className="px-3.5 py-1.5 rounded-md bg-[#1f293d] hover:bg-slate-700 text-xs font-bold text-white whitespace-nowrap border border-slate-700/60"
+                >
+                  {currentUser ? currentUser.email.split('@')[0] : 'Sign In'}
+                </button>
+              </div>
+            </div>
+
+            {/* Mobile Full-Width Navigation Row (No Cutoff or Blue Scrollbar) */}
+            <nav className="flex md:hidden items-center gap-1.5 pb-2.5 pt-1 overflow-x-auto no-scrollbar border-t border-[#1f293d]/70">
               {[
                 'home',
                 'products',
@@ -3924,14 +4093,14 @@ export default function App() {
                 ...(isAdminAccount || adminUnlocked ? ['admin'] : []),
               ].map((page) => (
                 <button
-                  key={page}
+                  key={`mob-${page}`}
                   onClick={() => setActivePage(page)}
-                  className={`px-3 py-1.5 rounded text-xs font-bold uppercase transition-colors ${
+                  className={`flex-1 min-w-[72px] py-2 px-2 rounded-md text-[11px] font-bold uppercase text-center transition-colors whitespace-nowrap ${
                     activePage === page
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-blue-600 text-white shadow-sm'
                       : page === 'admin'
-                      ? 'text-emerald-400 border border-emerald-800/50 bg-emerald-950/30 hover:bg-emerald-900/40'
-                      : 'text-slate-400 hover:text-white'
+                      ? 'text-emerald-400 border border-emerald-800/50 bg-emerald-950/40'
+                      : 'bg-[#0b0f19]/80 text-slate-300 border border-[#1f293d]'
                   }`}
                 >
                   {page === 'products'
@@ -3941,24 +4110,15 @@ export default function App() {
                     : page === 'upgrade'
                     ? 'Upgrade'
                     : page === 'admin'
-                    ? 'Admin Console'
+                    ? 'Admin'
                     : 'Home'}
                 </button>
               ))}
             </nav>
-
-            <div>
-              <button
-                onClick={() => setActivePage('login')}
-                className="px-3 py-1.5 rounded bg-[#1f293d] hover:bg-slate-700 text-xs font-bold text-white"
-              >
-                {currentUser ? currentUser.email.split('@')[0] : 'Sign In'}
-              </button>
-            </div>
           </div>
         </header>
 
-        <main key={activePage} className="max-w-7xl mx-auto px-4 py-6 app-view-container">
+        <main key={activePage} className="max-w-7xl mx-auto px-3 sm:px-4 py-5 pb-28 lg:pb-8 app-view-container">
           {activePage === 'home' && renderHomePage()}
           {activePage === 'products' && (
             <div className="space-y-4">
@@ -3973,6 +4133,8 @@ export default function App() {
         </main>
       </div>
 
+      {renderFloatingMobileBar()}
+      {renderMobileManifestDrawer()}
       {renderProductModal()}
       {renderPreorderModal()}
     </>
