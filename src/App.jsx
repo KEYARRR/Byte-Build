@@ -359,7 +359,6 @@ const getStorageProfile = (part) => {
   };
 };
 
-// SPL PSU Tier List Profile Resolver
 const getPsuProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
   const wattMatch = name.match(/(\d{3,4})\s*W/);
@@ -680,6 +679,7 @@ export default function App() {
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [sortBy, setSortBy] = useState('price-asc');
+  const [showSoldOut, setShowSoldOut] = useState(false);
 
   // Smart Build Assistant States
   const [assistantBudget, setAssistantBudget] = useState(40000);
@@ -1356,7 +1356,6 @@ export default function App() {
       }
     }
 
-    // SPL PSU Tier List & Wattage Rules
     if (psu) {
       const requiredTierRank =
         gpuProfile.tier >= 5 || cpuProfile.tier >= 5
@@ -1542,20 +1541,44 @@ export default function App() {
 
   const brandsForActiveCategory = useMemo(() => {
     const active = normalizeText(activeTab);
+    const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
     const brands = catalogProducts
-      .filter((product) => normalizeText(product?.category) === active && product?.brand)
+      .filter((product) => {
+        if (normalizeText(product?.category) !== active || !product?.brand) return false;
+        if (
+          !isReferenceView &&
+          inventoryMode === 'active' &&
+          !showSoldOut &&
+          product?.stock_status === 'Sold Out'
+        ) {
+          return false;
+        }
+        return true;
+      })
       .map((product) => product.brand);
     return ['All', ...new Set(brands)];
-  }, [catalogProducts, activeTab]);
+  }, [catalogProducts, activeTab, activePage, upgradeMode, inventoryMode, showSoldOut]);
 
   const formFactorsForActiveCategory = useMemo(() => {
     const active = normalizeText(activeTab);
+    const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
     const factors = catalogProducts
-      .filter((product) => normalizeText(product?.category) === active)
+      .filter((product) => {
+        if (normalizeText(product?.category) !== active) return false;
+        if (
+          !isReferenceView &&
+          inventoryMode === 'active' &&
+          !showSoldOut &&
+          product?.stock_status === 'Sold Out'
+        ) {
+          return false;
+        }
+        return true;
+      })
       .map((product) => detectPartFormFactor(product))
       .filter((ff) => ff !== 'Standard');
     return ['All', ...new Set(factors)];
-  }, [catalogProducts, activeTab]);
+  }, [catalogProducts, activeTab, activePage, upgradeMode, inventoryMode, showSoldOut]);
 
   const filteredProducts = useMemo(() => {
     const active = normalizeText(activeTab);
@@ -1565,6 +1588,16 @@ export default function App() {
 
     const filtered = catalogProducts.filter((product) => {
       if (normalizeText(product?.category) !== active) return false;
+
+      const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
+      if (
+        !isReferenceView &&
+        inventoryMode === 'active' &&
+        !showSoldOut &&
+        product?.stock_status === 'Sold Out'
+      ) {
+        return false;
+      }
 
       const searchableText = [
         product?.name,
@@ -1618,18 +1651,32 @@ export default function App() {
     minPrice,
     maxPrice,
     sortBy,
+    activePage,
+    upgradeMode,
+    inventoryMode,
+    showSoldOut,
   ]);
 
   const categoryCounts = useMemo(() => {
+    const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
     return CATEGORIES.reduce((acc, category) => {
-      acc[category] = catalogProducts.filter(
-        (product) => normalizeText(product?.category) === normalizeText(category)
-      ).length;
+      acc[category] = catalogProducts.filter((product) => {
+        if (normalizeText(product?.category) !== normalizeText(category)) return false;
+        if (
+          !isReferenceView &&
+          inventoryMode === 'active' &&
+          !showSoldOut &&
+          product?.stock_status === 'Sold Out'
+        ) {
+          return false;
+        }
+        return true;
+      }).length;
       return acc;
     }, {});
-  }, [catalogProducts]);
+  }, [catalogProducts, activePage, upgradeMode, inventoryMode, showSoldOut]);
 
-  // Rule-Based Smart Build Assistant Engine (SPL PSU Tier List Enforced)
+  // Rule-Based Smart Build Assistant Engine (SPL PSU Tier List Enforced & Varied Selection)
   const handleRunSmartBuildAssistant = () => {
     const budget = Math.max(Number(assistantBudget) || 20000, 15000);
     const inStock = activeProducts.filter(
@@ -2026,20 +2073,28 @@ export default function App() {
 
   const renderProductRow = (product, allowAdd = true, existingCategory = null) => {
     const isReference = product.source_type === 'reference';
-    const status = isReference ? 'reference' : inventoryMode === 'preorder' ? 'Pre-Order' : product.stock_status || 'In Stock';
+    const status = isReference
+      ? 'reference'
+      : inventoryMode === 'preorder'
+      ? 'Pre-Order'
+      : product.stock_status || 'In Stock';
+    const isSoldOut = !isReference && status === 'Sold Out';
     const formFactorTag = detectPartFormFactor(product);
     const isPsu = normalizeText(product?.category) === 'power supplies';
     const psuInfo = isPsu ? getPsuProfile(product) : null;
 
     let buttonLabel = '+ Add';
-    if (activePage === 'upgrade' && upgradeMode === 'reference') buttonLabel = 'Select Owned';
-    if (activePage === 'upgrade' && upgradeMode === 'shop') buttonLabel = 'Choose Upgrade';
-    if (inventoryMode === 'preorder' || product.stock_status === 'Pre-Order') buttonLabel = 'Pre-Order';
+    if (isSoldOut) buttonLabel = 'Sold Out';
+    else if (activePage === 'upgrade' && upgradeMode === 'reference') buttonLabel = 'Select Owned';
+    else if (activePage === 'upgrade' && upgradeMode === 'shop') buttonLabel = 'Choose Upgrade';
+    else if (inventoryMode === 'preorder' || product.stock_status === 'Pre-Order') buttonLabel = 'Pre-Order';
 
     return (
       <div
         key={`row-${product.id}`}
-        className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 hover:border-slate-500 transition-colors flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left"
+        className={`bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 transition-colors flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left ${
+          isSoldOut ? 'opacity-70' : 'hover:border-slate-500'
+        }`}
       >
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-1">
@@ -2111,9 +2166,15 @@ export default function App() {
             </button>
             {allowAdd && (
               <button
-                onClick={() => handleUpgradeAction(existingCategory || product.category, product)}
+                type="button"
+                disabled={isSoldOut}
+                onClick={() =>
+                  !isSoldOut && handleUpgradeAction(existingCategory || product.category, product)
+                }
                 className={`px-3.5 py-1.5 rounded text-xs font-bold transition-colors ${
-                  buttonLabel === 'Pre-Order'
+                  isSoldOut
+                    ? 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed'
+                    : buttonLabel === 'Pre-Order'
                     ? 'bg-blue-600 hover:bg-blue-500 text-white'
                     : 'bg-blue-700 hover:bg-blue-600 text-white'
                 }`}
@@ -2275,7 +2336,11 @@ export default function App() {
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Active Stock ({activeProducts.length})
+                Active Stock (
+                {showSoldOut
+                  ? activeProducts.length
+                  : activeProducts.filter((p) => p.stock_status !== 'Sold Out').length}
+                )
               </button>
               <button
                 type="button"
@@ -2360,17 +2425,32 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-slate-400">Sort:</span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-blue-500 font-semibold"
-            >
-              <option value="price-asc">Price: Lowest to Highest</option>
-              <option value="price-desc">Price: Highest to Lowest</option>
-              <option value="rating">Hardware Rating (Score)</option>
-            </select>
+          <div className="flex flex-wrap items-center gap-3">
+            {inventoryMode === 'active' &&
+              !(activePage === 'upgrade' && upgradeMode === 'reference') && (
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showSoldOut}
+                    onChange={(e) => setShowSoldOut(e.target.checked)}
+                    className="rounded border-[#1f293d] bg-[#0b0f19] text-blue-600 focus:ring-0"
+                  />
+                  <span>Show Sold Out</span>
+                </label>
+              )}
+
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-slate-400">Sort:</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1 text-xs text-white focus:outline-none focus:border-blue-500 font-semibold"
+              >
+                <option value="price-asc">Price: Lowest to Highest</option>
+                <option value="price-desc">Price: Highest to Lowest</option>
+                <option value="rating">Hardware Rating (Score)</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>
@@ -2807,6 +2887,10 @@ export default function App() {
         .sort((a, b) => Number(b.hardware_score || 0) - Number(a.hardware_score || 0))[0];
     }).filter(Boolean);
 
+    const availableActiveCount = activeProducts.filter(
+      (p) => p.stock_status !== 'Sold Out'
+    ).length;
+
     return (
       <div className="space-y-6">
         <section className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 sm:p-7 text-left">
@@ -2843,7 +2927,7 @@ export default function App() {
             <div className="hidden lg:grid grid-cols-2 gap-3 shrink-0 w-72">
               <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
                 <span className="text-[10px] text-slate-500 font-bold uppercase block">In-Stock SKUs</span>
-                <span className="text-lg font-black text-white font-mono">{activeProducts.length} Parts</span>
+                <span className="text-lg font-black text-white font-mono">{availableActiveCount} Parts</span>
               </div>
               <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
                 <span className="text-[10px] text-slate-500 font-bold uppercase block">Validation</span>
@@ -2870,7 +2954,7 @@ export default function App() {
               onClick={() => setActivePage('products')}
               className="text-xs text-blue-400 hover:underline"
             >
-              Full Inventory ({activeProducts.length}) →
+              Full Inventory ({availableActiveCount}) →
             </button>
           </div>
           {renderCategoryNavStrip()}
