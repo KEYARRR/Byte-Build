@@ -341,14 +341,62 @@ const getRamProfile = (part, userCount = null) => {
 const getStorageProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
   const capacityText = String(part?.capacity || '').toUpperCase();
-  const isNvmeGen4 = name.includes('GEN4') || name.includes('PCIE 4') || name.includes('SN770') || name.includes('SN850') || name.includes('980 PRO') || name.includes('990 PRO') || name.includes('KC3000');
-  const isNvmeGen3 = name.includes('GEN3') || name.includes('SN570') || name.includes('SN580') || name.includes('970 EVO') || name.includes('MP33') || name.includes('P3');
-  const isSataSsd = name.includes('SATA') || (name.includes('SSD') && !name.includes('NVME') && !name.includes('M.2'));
-  const isHdd = name.includes('HDD') || name.includes('BARRACUDA') || (name.includes('BLUE') && name.includes('RPM'));
-  let driveClass = isNvmeGen4 ? 'Gen4 NVMe' : isNvmeGen3 ? 'Gen3 NVMe' : isSataSsd ? 'SATA SSD' : isHdd ? 'Mechanical HDD' : 'Standard SSD';
-  const gbMatch = `${name} ${capacityText}`.match(/(\d+)\s*GB/);
-  const tbMatch = `${name} ${capacityText}`.match(/(\d+)\s*TB/);
+  const combined = `${name} ${capacityText} ${String(part?.specs || '').toUpperCase()}`;
+
+  const isNvmeGen4 =
+    combined.includes('GEN4') ||
+    combined.includes('GEN 4') ||
+    combined.includes('PCIE 4') ||
+    combined.includes('SN580') ||
+    combined.includes('SN770') ||
+    combined.includes('SN850') ||
+    combined.includes('980 PRO') ||
+    combined.includes('990 PRO') ||
+    combined.includes('990 EVO') ||
+    combined.includes('KC3000') ||
+    combined.includes('NV3') ||
+    combined.includes('LEGEND 860') ||
+    combined.includes('LEGEND 960') ||
+    combined.includes('NQ780');
+
+  const isNvmeGen3 =
+    combined.includes('GEN3') ||
+    combined.includes('GEN 3') ||
+    combined.includes('PCIE 3') ||
+    combined.includes('SN570') ||
+    combined.includes('970 EVO') ||
+    combined.includes('MP33') ||
+    combined.includes('P3') ||
+    combined.includes('LEGEND 710') ||
+    combined.includes('2500E') ||
+    combined.includes('NM610') ||
+    combined.includes('NM620');
+
+  const isSataSsd =
+    (combined.includes('SATA') ||
+      (combined.includes('SSD') && !combined.includes('NVME') && !combined.includes('M.2'))) &&
+    !isNvmeGen4 &&
+    !isNvmeGen3;
+
+  const isHdd =
+    combined.includes('HDD') ||
+    combined.includes('BARRACUDA') ||
+    (combined.includes('BLUE') && combined.includes('RPM'));
+
+  const driveClass = isNvmeGen4
+    ? 'Gen4 NVMe'
+    : isNvmeGen3
+    ? 'Gen3 NVMe'
+    : isSataSsd
+    ? 'SATA SSD'
+    : isHdd
+    ? 'Mechanical HDD'
+    : 'NVMe SSD';
+
+  const tbMatch = combined.match(/(\d+)\s*TB/);
+  const gbMatch = combined.match(/(\d+)\s*GB/);
   const capacityGB = tbMatch ? Number(tbMatch[1]) * 1000 : gbMatch ? Number(gbMatch[1]) : 500;
+
   return {
     capacityGB,
     driveClass,
@@ -680,6 +728,9 @@ export default function App() {
   const [maxPrice, setMaxPrice] = useState('');
   const [sortBy, setSortBy] = useState('price-asc');
   const [showSoldOut, setShowSoldOut] = useState(false);
+
+  // Workload Wattage Discretion Mode ('Gaming' | 'Rendering' | 'Scrolling')
+  const [workloadUsageMode, setWorkloadUsageMode] = useState('Gaming');
 
   // Smart Build Assistant States
   const [assistantBudget, setAssistantBudget] = useState(40000);
@@ -1195,7 +1246,6 @@ export default function App() {
   const selectedItems = useMemo(() => Object.values(selectedBuild).filter(Boolean), [selectedBuild]);
 
   const totalPrice = selectedItems.reduce((sum, item) => sum + Number(item?.price || 0), 0);
-  const monthlyEstimate = totalPrice > 0 ? totalPrice / 12 : 0;
 
   const effectiveParts = useMemo(() => {
     return {
@@ -1224,11 +1274,66 @@ export default function App() {
   const cpuSocket = detectCpuSocket(effectiveParts.Processors);
   const motherboardSocket = detectMotherboardSocket(effectiveParts.Motherboards);
 
+  // Scenario Wattage Breakdown: Scrolling vs. Gaming vs. Rendering
+  const wattageBreakdown = useMemo(() => {
+    const hasAnyPart = cpuProfile.watts > 0 || gpuProfile.watts > 0;
+    if (!hasAnyPart) {
+      return {
+        scrolling: 0,
+        gaming: 0,
+        rendering: 0,
+        peakOnLoad: 0,
+      };
+    }
+
+    const basePlatformDraw = 25; // Motherboard + RAM + SSD + Fans baseline
+    const cpuDraw = cpuProfile.watts;
+    const gpuDraw = gpuProfile.watts;
+
+    // Scrolling / Browsing / Light Desktop: CPU & GPU mostly at low-power states
+    const scrollingWatts = Math.round(
+      basePlatformDraw +
+        (cpuDraw > 0 ? Math.max(10, cpuDraw * 0.16) : 0) +
+        (gpuDraw > 0 ? Math.max(10, gpuDraw * 0.08) : 0)
+    );
+
+    // Gaming Load: GPU typically hits ~85-95% peak while CPU runs ~55-70%
+    const gamingWatts = Math.round(
+      basePlatformDraw +
+        (cpuDraw > 0 ? cpuDraw * 0.65 : 0) +
+        (gpuDraw > 0 ? gpuDraw * 0.92 : 0)
+    );
+
+    // Rendering / Heavy Multi-Core Compute: CPU hits ~95-100% sustained, GPU ~65-80% (or ~90% if GPU-accelerated)
+    const renderingWatts = Math.round(
+      basePlatformDraw +
+        (cpuDraw > 0 ? cpuDraw * 0.98 : 0) +
+        (gpuDraw > 0 ? gpuDraw * 0.72 : 0)
+    );
+
+    const peakOnLoad = Math.max(gamingWatts, renderingWatts);
+
+    return {
+      scrolling: scrollingWatts,
+      gaming: gamingWatts,
+      rendering: renderingWatts,
+      peakOnLoad,
+    };
+  }, [cpuProfile.watts, gpuProfile.watts]);
+
+  const activeScenarioWatts = useMemo(() => {
+    if (workloadUsageMode === 'Scrolling') return wattageBreakdown.scrolling;
+    if (workloadUsageMode === 'Rendering') return wattageBreakdown.rendering;
+    return wattageBreakdown.gaming;
+  }, [workloadUsageMode, wattageBreakdown]);
+
   const totalSystemWattage = useMemo(() => {
+    if (cpuProfile.watts === 0 && gpuProfile.watts === 0) return 0;
     return cpuProfile.watts + gpuProfile.watts + Number(dssRules.psuBufferWatts || 120);
   }, [cpuProfile.watts, gpuProfile.watts, dssRules.psuBufferWatts]);
 
   const recommendedPsuWatts = useMemo(() => {
+    if (totalSystemWattage === 0) return 0;
     return Math.ceil(totalSystemWattage / 50) * 50;
   }, [totalSystemWattage]);
 
@@ -1377,7 +1482,7 @@ export default function App() {
           category: 'Power Supply',
           severity: 'critical',
           title: 'Insufficient Power Supply Headroom',
-          message: `System peak load requires at least ${recommendedPsuWatts}W. Current unit (${psuProfile.watts}W · SPL Tier ${psuProfile.splTier}) risks shutdown during transient GPU spikes.`,
+          message: `System peak load requires at least ${recommendedPsuWatts}W (Gaming: ~${wattageBreakdown.gaming}W · Rendering: ~${wattageBreakdown.rendering}W). Current unit (${psuProfile.watts}W · SPL Tier ${psuProfile.splTier}) risks shutdown under heavy load.`,
           action: `Select a Tier ${gpuProfile.tier >= 5 ? 'B/A' : 'C+'} power supply rated at ${recommendedPsuWatts}W or higher.`,
         });
       } else if (psuProfile.tierRank < requiredTierRank) {
@@ -1399,16 +1504,27 @@ export default function App() {
           category: 'Storage Speed',
           severity: 'critical',
           title: 'Mechanical Boot Drive Detected',
-          message: `Running Windows from a mechanical hard drive (${storage.name}) causes slow boot times and system lag.`,
-          action: 'Install a high-speed M.2 NVMe SSD as the primary OS boot drive.',
+          message: `Running Windows from ${storage.name} causes slow boot times and system lag.`,
+          action: 'Install an M.2 NVMe SSD as your primary drive.',
         });
-      } else if (storageProfile.capacityGB < minStorageRule) {
+      } else if (storageProfile.capacityGB > 0 && storageProfile.capacityGB < minStorageRule) {
         issues.push({
           category: 'Storage Space',
           severity: 'warning',
-          title: 'Restricted Storage Footprint',
-          message: `${storageProfile.capacityGB}GB is below the ${minStorageRule}GB baseline threshold and fills up quickly with OS cache and games.`,
-          action: `Equip at least a ${minStorageRule}GB or 1TB drive for a comfortable baseline.`,
+          title: 'Compact Boot Drive Capacity',
+          message: `${storage.name} (${storageProfile.capacityGB}GB) is below the ${minStorageRule}GB baseline and fills quickly with modern games and updates.`,
+          action: `Step up to a ${minStorageRule}GB or 1TB NVMe SSD if you install multiple large titles.`,
+        });
+      } else if (
+        storageProfile.isSataSsd &&
+        (gpuProfile.tier >= 4 || cpuProfile.tier >= 5)
+      ) {
+        issues.push({
+          category: 'Storage Bus',
+          severity: 'warning',
+          title: 'SATA Interface on High-Tier Rig',
+          message: `${storage.name} operates over SATA III (~550 MB/s), which is slower than PCIe NVMe drives for large game asset streaming.`,
+          action: 'Optionally pair with an M.2 NVMe SSD for faster load times.',
         });
       }
     }
@@ -1447,6 +1563,7 @@ export default function App() {
     caseProfile,
     motherboardProfile,
     recommendedPsuWatts,
+    wattageBreakdown,
     activePage,
     dssRules,
   ]);
@@ -1481,15 +1598,15 @@ export default function App() {
       return {
         title: 'System Validator Ready',
         tone: 'neutral',
-        summary: 'Select existing or proposed components to analyze socket pinouts, RAM channels, SPL PSU tiers, power delivery, and thermal tolerances.',
+        summary: 'Select existing or proposed components to analyze socket pinouts, RAM channels, SPL PSU tiers, workload wattage (scrolling, gaming, rendering), and thermal tolerances.',
       };
     }
     return {
       title: 'Platform Architecture Verified',
       tone: 'success',
-      summary: `All platform criteria cleared.\n• Socket: ${cpuSocket || 'Validated'}\n• SPL PSU Tier: ${effectiveParts['Power Supplies'] ? `Tier ${psuProfile.splTier}` : 'Pending'}\n• Power Headroom: ~${psuProfile.watts > 0 ? psuProfile.watts - recommendedPsuWatts : dssRules.psuBufferWatts}W buffer above transient peak.`,
+      summary: `All platform criteria cleared.\n• Socket: ${cpuSocket || 'Validated'}\n• SPL PSU Tier: ${effectiveParts['Power Supplies'] ? `Tier ${psuProfile.splTier}` : 'Pending'}\n• Workload Draw: ~${wattageBreakdown.scrolling}W Scrolling · ~${wattageBreakdown.gaming}W Gaming · ~${wattageBreakdown.rendering}W Rendering.`,
     };
-  }, [dssIssues, selectedItems, existingPc, cpuSocket, effectiveParts, psuProfile, recommendedPsuWatts, dssRules.psuBufferWatts]);
+  }, [dssIssues, selectedItems, existingPc, cpuSocket, effectiveParts, psuProfile, wattageBreakdown]);
 
   const compatibilityScore = useMemo(() => {
     let score = 100;
@@ -1676,7 +1793,6 @@ export default function App() {
     }, {});
   }, [catalogProducts, activePage, upgradeMode, inventoryMode, showSoldOut]);
 
-  // Rule-Based Smart Build Assistant Engine (SPL PSU Tier List Enforced & Varied Selection)
   const handleRunSmartBuildAssistant = () => {
     const budget = Math.max(Number(assistantBudget) || 20000, 15000);
     const inStock = activeProducts.filter(
@@ -1713,7 +1829,7 @@ export default function App() {
           Number(b.price) - Number(a.price)
       );
 
-      const topCandidates = sortedPool.slice(0, Math.min(3, sortedPool.length));
+      const topCandidates = sortedPool.slice(0, Math.min(4, sortedPool.length));
       const nonRepeating =
         topCandidates.length > 1 && currentSelectedId
           ? topCandidates.filter((item) => item.id !== currentSelectedId)
@@ -1733,12 +1849,12 @@ export default function App() {
 
     const weights =
       assistantProfile === 'Gaming'
-        ? { cpu: gCpu, gpu: gGpu, board: 0.13, ram: 0.08, storage: 0.08, psu: 0.07, cooler: 0.03, case: 0.04 }
+        ? { cpu: gCpu, gpu: gGpu, board: 0.12, ram: 0.08, storage: 0.10, psu: 0.07, cooler: 0.03, case: 0.03 }
         : assistantProfile === 'Content Creation'
-        ? { cpu: cCpu, gpu: cGpu, board: 0.14, ram: 0.10, storage: 0.08, psu: 0.06, cooler: 0.03, case: 0.03 }
+        ? { cpu: cCpu, gpu: cGpu, board: 0.13, ram: 0.10, storage: 0.10, psu: 0.06, cooler: 0.02, case: 0.03 }
         : isOfficeApu
-        ? { cpu: 0.32, gpu: 0.0, board: 0.22, ram: 0.14, storage: 0.12, psu: 0.09, cooler: 0.04, case: 0.07 }
-        : { cpu: 0.24, gpu: 0.31, board: 0.14, ram: 0.09, storage: 0.08, psu: 0.07, cooler: 0.03, case: 0.04 };
+        ? { cpu: 0.28, gpu: 0.0, board: 0.20, ram: 0.13, storage: 0.21, psu: 0.08, cooler: 0.04, case: 0.06 }
+        : { cpu: 0.23, gpu: 0.30, board: 0.13, ram: 0.09, storage: 0.11, psu: 0.07, cooler: 0.03, case: 0.04 };
 
     const apuPool = cpus.filter((c) => String(c.name).toUpperCase().includes('G'));
     const chosenCpu =
@@ -1774,10 +1890,23 @@ export default function App() {
       ? null
       : pickVariedWithinCap(gpus, budget * weights.gpu, selectedBuild['Video Cards']?.id);
 
-    const ssdPool = storages.filter((s) => !getStorageProfile(s).isHdd);
+    const minRuleGB = Number(dssRules.minStorageCapacityGB || 500);
+    const fullSizeSsdPool = storages.filter((s) => {
+      const sp = getStorageProfile(s);
+      return !sp.isHdd && sp.capacityGB >= minRuleGB;
+    });
+    const fallbackSsdPool = storages.filter((s) => !getStorageProfile(s).isHdd);
+    const activeStoragePool =
+      fullSizeSsdPool.length > 0
+        ? fullSizeSsdPool
+        : fallbackSsdPool.length > 0
+        ? fallbackSsdPool
+        : storages;
+
+    const storageBudgetCap = Math.max(budget * weights.storage, 6000);
     const chosenStorage = pickVariedWithinCap(
-      ssdPool.length > 0 ? ssdPool : storages,
-      budget * weights.storage,
+      activeStoragePool,
+      storageBudgetCap,
       selectedBuild.Storage?.id
     );
 
@@ -1924,7 +2053,7 @@ export default function App() {
   <div style="margin-top:16px;padding:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
     <div>
       <div style="font-size:12px;color:#475569;">Compatibility Score: <strong>${compatibilityScore}%</strong> · Est. Load: <strong>${totalSystemWattage}W</strong> (Rec. PSU: ${recommendedPsuWatts}W)</div>
-      <div style="font-size:11px;color:#64748b;margin-top:2px;">12-Month Installment Est.: ${peso(monthlyEstimate)}/mo (VAT Included)</div>
+      <div style="font-size:11px;color:#64748b;margin-top:2px;">Scrolling: ~${wattageBreakdown.scrolling}W · Gaming: ~${wattageBreakdown.gaming}W · Rendering: ~${wattageBreakdown.rendering}W</div>
     </div>
     <div style="font-size:20px;font-weight:900;color:#1e3a8a;font-family:sans-serif;">${peso(totalPrice)}</div>
   </div>
@@ -2467,204 +2596,246 @@ export default function App() {
     </div>
   );
 
-  const renderBuildSummary = () => (
-    <div
-      id="printable-quotation"
-      className="bg-[#111827] border border-[#1f293d] rounded-lg p-3"
-    >
-      <div className="hidden print:block mb-4 border-b-2 border-slate-900 pb-3">
-        <div className="flex justify-between items-start">
+  const renderBuildSummary = () => {
+    const psuCapacity = psuProfile.watts || recommendedPsuWatts || 650;
+    const loadPercent =
+      activeScenarioWatts > 0
+        ? Math.min((activeScenarioWatts / psuCapacity) * 100, 100)
+        : 0;
+    const isOverScenario =
+      psuProfile.watts > 0 && activeScenarioWatts > psuProfile.watts;
+
+    return (
+      <div
+        id="printable-quotation"
+        className="bg-[#111827] border border-[#1f293d] rounded-lg p-3"
+      >
+        <div className="hidden print:block mb-4 border-b-2 border-slate-900 pb-3">
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-lg font-black tracking-tight text-slate-900 uppercase">
+                BYTEBUILD COMPUTER SOLUTIONS
+              </h1>
+              <p className="text-[8pt] text-slate-600">
+                Quezon City, Metro Manila · Local PH Retail Distributor Quotation
+              </p>
+            </div>
+            <div className="text-right">
+              <h2 className="text-sm font-black text-slate-900 uppercase">
+                OFFICIAL QUOTATION
+              </h2>
+              <p className="text-[8pt] font-mono text-slate-600">
+                REF: BB-{printReferenceId}
+              </p>
+              <p className="text-[8pt] text-slate-500">Date: {printDateString}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#1f293d] pb-2 mb-2 print:hidden">
           <div>
-            <h1 className="text-lg font-black tracking-tight text-slate-900 uppercase">
-              BYTEBUILD COMPUTER SOLUTIONS
-            </h1>
-            <p className="text-[8pt] text-slate-600">
-              Quezon City, Metro Manila · Local PH Retail Distributor Quotation
+            <h3 className="text-xs font-bold text-white uppercase tracking-wider leading-tight">
+              System Build
+            </h3>
+            <p className="text-[10px] text-slate-400">
+              {selectedItems.length}/8 components configured
             </p>
           </div>
-          <div className="text-right">
-            <h2 className="text-sm font-black text-slate-900 uppercase">
-              OFFICIAL QUOTATION
-            </h2>
-            <p className="text-[8pt] font-mono text-slate-600">
-              REF: BB-{printReferenceId}
-            </p>
-            <p className="text-[8pt] text-slate-500">Date: {printDateString}</p>
-          </div>
-        </div>
-      </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#1f293d] pb-2 mb-2 print:hidden">
-        <div>
-          <h3 className="text-xs font-bold text-white uppercase tracking-wider leading-tight">
-            System Build
-          </h3>
-          <p className="text-[10px] text-slate-400">
-            {selectedItems.length}/8 components configured
-          </p>
-        </div>
-
-        <div className="flex items-center gap-1">
-          <button
-            onClick={handleSaveCurrentBuild}
-            disabled={savingBuild || selectedItems.length === 0}
-            className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
-          >
-            {savingBuild ? 'Saving...' : 'Save'}
-          </button>
-          <button
-            onClick={handleExportQuotation}
-            disabled={exportingQuote || selectedItems.length === 0}
-            className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-bold disabled:opacity-40"
-            title="Download quotation file & log to database"
-          >
-            {exportingQuote ? 'Exporting...' : 'Export'}
-          </button>
-          <button
-            onClick={() => window.print()}
-            disabled={selectedItems.length === 0}
-            className="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
-          >
-            Print
-          </button>
-          <button
-            onClick={handleClearBuild}
-            className="px-1.5 py-0.5 text-slate-400 hover:text-white text-[10px]"
-          >
-            Reset
-          </button>
-        </div>
-      </div>
-
-      <div className="space-y-1 print-table-wrapper">
-        <div className="hidden print:table-row bg-slate-100 border-b border-slate-300 text-[8pt] font-black uppercase text-slate-700">
-          <div className="table-cell p-2 text-left w-2/3">Component Specification</div>
-          <div className="table-cell p-2 text-right w-1/3">Amount (PHP)</div>
-        </div>
-
-        {CATEGORIES.map((category) => {
-          const item = selectedBuild[category];
-          const isMemory = category === 'Memory';
-          const isPsu = category === 'Power Supplies';
-          const printRowClass = !item ? 'print:hidden' : '';
-
-          const shortLabel =
-            category === 'Processors'
-              ? 'CPU'
-              : category === 'Motherboards'
-              ? 'MOBO'
-              : category === 'Video Cards'
-              ? 'GPU'
-              : category === 'Memory'
-              ? 'RAM'
-              : category === 'Storage'
-              ? 'SSD'
-              : category === 'Power Supplies'
-              ? 'PSU'
-              : category === 'CPU Coolers'
-              ? 'COOLER'
-              : 'CASE';
-
-          return (
-            <div
-              key={category}
-              className={`px-2 py-1 rounded border border-[#1f293d] bg-[#0b0f19] flex items-center justify-between gap-2 text-left print-table-row ${printRowClass}`}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleSaveCurrentBuild}
+              disabled={savingBuild || selectedItems.length === 0}
+              className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
             >
-              <div className="min-w-0 flex-1 flex items-center gap-1.5 print-cell-name">
-                <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0 w-12">
-                  {shortLabel}
-                </span>
+              {savingBuild ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              onClick={handleExportQuotation}
+              disabled={exportingQuote || selectedItems.length === 0}
+              className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-bold disabled:opacity-40"
+              title="Download quotation file & log to database"
+            >
+              {exportingQuote ? 'Exporting...' : 'Export'}
+            </button>
+            <button
+              onClick={() => window.print()}
+              disabled={selectedItems.length === 0}
+              className="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
+            >
+              Print
+            </button>
+            <button
+              onClick={handleClearBuild}
+              className="px-1.5 py-0.5 text-slate-400 hover:text-white text-[10px]"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
 
-                <p className="text-[11px] font-semibold text-white truncate">
-                  {item ? item.name : <span className="text-slate-600 italic">Unassigned</span>}
-                </p>
+        <div className="space-y-1 print-table-wrapper">
+          <div className="hidden print:table-row bg-slate-100 border-b border-slate-300 text-[8pt] font-black uppercase text-slate-700">
+            <div className="table-cell p-2 text-left w-2/3">Component Specification</div>
+            <div className="table-cell p-2 text-right w-1/3">Amount (PHP)</div>
+          </div>
 
-                {isPsu && item && (
-                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800/40 shrink-0 print:hidden">
-                    T-{getPsuProfile(item).splTier}
+          {CATEGORIES.map((category) => {
+            const item = selectedBuild[category];
+            const isMemory = category === 'Memory';
+            const isPsu = category === 'Power Supplies';
+            const printRowClass = !item ? 'print:hidden' : '';
+
+            const shortLabel =
+              category === 'Processors'
+                ? 'CPU'
+                : category === 'Motherboards'
+                ? 'MOBO'
+                : category === 'Video Cards'
+                ? 'GPU'
+                : category === 'Memory'
+                ? 'RAM'
+                : category === 'Storage'
+                ? 'SSD'
+                : category === 'Power Supplies'
+                ? 'PSU'
+                : category === 'CPU Coolers'
+                ? 'COOLER'
+                : 'CASE';
+
+            return (
+              <div
+                key={category}
+                className={`px-2 py-1 rounded border border-[#1f293d] bg-[#0b0f19] flex items-center justify-between gap-2 text-left print-table-row ${printRowClass}`}
+              >
+                <div className="min-w-0 flex-1 flex items-center gap-1.5 print-cell-name">
+                  <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0 w-12">
+                    {shortLabel}
                   </span>
-                )}
 
-                {isMemory && item && (
-                  <div className="flex items-center gap-0.5 bg-[#111827] px-1 rounded shrink-0 print:hidden">
-                    {[1, 2, 4].map((count) => (
-                      <button
-                        key={count}
-                        onClick={() => setSelectedRamCount(count)}
-                        className={`px-1 text-[8px] font-bold rounded ${
-                          selectedRamCount === count
-                            ? 'bg-blue-600 text-white'
-                            : 'text-slate-400'
-                        }`}
-                      >
-                        {count}x
-                      </button>
-                    ))}
-                  </div>
-                )}
+                  <p className="text-[11px] font-semibold text-white truncate">
+                    {item ? item.name : <span className="text-slate-600 italic">Unassigned</span>}
+                  </p>
+
+                  {isPsu && item && (
+                    <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800/40 shrink-0 print:hidden">
+                      T-{getPsuProfile(item).splTier}
+                    </span>
+                  )}
+
+                  {isMemory && item && (
+                    <div className="flex items-center gap-0.5 bg-[#111827] px-1 rounded shrink-0 print:hidden">
+                      {[1, 2, 4].map((count) => (
+                        <button
+                          key={count}
+                          onClick={() => setSelectedRamCount(count)}
+                          className={`px-1 text-[8px] font-bold rounded ${
+                            selectedRamCount === count
+                              ? 'bg-blue-600 text-white'
+                              : 'text-slate-400'
+                          }`}
+                        >
+                          {count}x
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0 print-cell-price">
+                  <span className="text-[11px] font-mono font-bold text-slate-200 print-price">
+                    {item ? (item.price ? peso(item.price) : 'Included') : '--'}
+                  </span>
+                  {item && (
+                    <button
+                      onClick={() =>
+                        setSelectedBuild((prev) => ({ ...prev, [category]: null }))
+                      }
+                      className="text-slate-500 hover:text-red-400 font-bold text-xs leading-none print:hidden"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </div>
+            );
+          })}
+        </div>
 
-              <div className="flex items-center gap-1.5 shrink-0 print-cell-price">
-                <span className="text-[11px] font-mono font-bold text-slate-200 print-price">
-                  {item ? (item.price ? peso(item.price) : 'Included') : '--'}
-                </span>
-                {item && (
+        <div className="mt-2.5 pt-2 border-t border-[#1f293d] print-summary-box">
+          <div className="mb-2 p-2 rounded bg-[#0b0f19] border border-[#1f293d] space-y-1.5 print:hidden">
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                Workload Draw
+              </span>
+              <div className="flex items-center gap-1 bg-[#111827] p-0.5 rounded border border-[#1f293d]">
+                {['Scrolling', 'Gaming', 'Rendering'].map((mode) => (
                   <button
-                    onClick={() =>
-                      setSelectedBuild((prev) => ({ ...prev, [category]: null }))
-                    }
-                    className="text-slate-500 hover:text-red-400 font-bold text-xs leading-none print:hidden"
+                    key={mode}
+                    type="button"
+                    onClick={() => setWorkloadUsageMode(mode)}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
+                      workloadUsageMode === mode
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
                   >
-                    ×
+                    {mode}
                   </button>
-                )}
+                ))}
               </div>
             </div>
-          );
-        })}
-      </div>
 
-      <div className="mt-2.5 pt-2 border-t border-[#1f293d] print-summary-box">
-        <div className="mb-2 px-2 py-1.5 rounded bg-[#0b0f19] border border-[#1f293d] print:hidden">
-          <div className="flex justify-between items-center text-[11px] mb-1">
-            <span className="text-slate-400 font-semibold">
-              Est. Load: <strong className="text-white font-mono">{totalSystemWattage}W</strong>
-            </span>
-            <span className="text-[10px] text-slate-500">
-              Min PSU: {recommendedPsuWatts}W {effectiveParts['Power Supplies'] ? `(Tier ${psuProfile.splTier})` : ''}
-            </span>
-          </div>
-          <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
-            <div
-              className={`h-full ${
-                totalSystemWattage > (psuProfile.watts || recommendedPsuWatts)
-                  ? 'bg-red-500'
-                  : 'bg-blue-500'
-              }`}
-              style={{
-                width: `${Math.min(
-                  (totalSystemWattage / (psuProfile.watts || 650)) * 100,
-                  100
-                )}%`,
-              }}
-            ></div>
-          </div>
-        </div>
+            <div className="flex justify-between items-center text-[11px]">
+              <span className="text-slate-300 font-semibold">
+                {workloadUsageMode}:{' '}
+                <strong className="text-white font-mono">~{activeScenarioWatts}W</strong>
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                Peak Cap: {totalSystemWattage}W · Rec PSU: {recommendedPsuWatts || '--'}W
+              </span>
+            </div>
 
-        <div className="flex justify-between items-center">
-          <div>
-            <p className="text-xs text-slate-400 font-bold leading-none">Total Estimate</p>
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              12-Mo: <span className="font-mono text-slate-300 font-semibold">{peso(monthlyEstimate)}/mo</span>
+            <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className={`h-full transition-all duration-200 ${
+                  isOverScenario ? 'bg-red-500' : 'bg-blue-500'
+                }`}
+                style={{ width: `${loadPercent}%` }}
+              ></div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1 pt-0.5 text-[9px] text-slate-400 font-mono">
+              <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
+                <span>Scroll</span>
+                <strong className="text-slate-200">{wattageBreakdown.scrolling}W</strong>
+              </div>
+              <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
+                <span>Gaming</span>
+                <strong className="text-emerald-300">{wattageBreakdown.gaming}W</strong>
+              </div>
+              <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
+                <span>Render</span>
+                <strong className="text-blue-300">{wattageBreakdown.rendering}W</strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-xs text-slate-400 font-bold leading-none">Total Estimate</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Cash / Direct Retail (PHP)
+              </p>
+            </div>
+            <p className="text-lg font-black text-emerald-400 font-mono print-total">
+              {peso(totalPrice)}
             </p>
           </div>
-          <p className="text-lg font-black text-emerald-400 font-mono print-total">
-            {peso(totalPrice)}
-          </p>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderRecommendationPanel = () => (
     <div className="space-y-3">
@@ -2906,7 +3077,7 @@ export default function App() {
                 Configure, Upgrade, and Quote Your Next Desktop.
               </h2>
               <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-                Use the Smart Build Assistant to generate Recommended System Builds with SPL PSU tier validation, check compatibility, and export formal quotations.
+                Use the Smart Build Assistant to generate Recommended System Builds with SPL PSU tier validation, workload wattage estimation, and formal quotations.
               </p>
               <div className="mt-5 flex flex-wrap gap-2.5">
                 <button
@@ -3250,7 +3421,7 @@ export default function App() {
                     required
                     value={newItemForm.name}
                     onChange={(e) => setNewItemForm((p) => ({ ...p, name: e.target.value }))}
-                    placeholder="e.g. MSI MAG A650BN 650W 80+ Bronze"
+                    placeholder="e.g. Kingston NV3 1TB PCIe 4.0 NVMe M.2 SSD"
                     className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
                   />
                 </div>
@@ -3262,7 +3433,7 @@ export default function App() {
                       type="text"
                       value={newItemForm.brand}
                       onChange={(e) => setNewItemForm((p) => ({ ...p, brand: e.target.value }))}
-                      placeholder="AMD / Intel / MSI"
+                      placeholder="AMD / Kingston / MSI"
                       className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
                     />
                   </div>
@@ -3291,7 +3462,7 @@ export default function App() {
                         required
                         value={newItemForm.price}
                         onChange={(e) => setNewItemForm((p) => ({ ...p, price: e.target.value }))}
-                        placeholder="3450"
+                        placeholder="10855"
                         className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white font-mono"
                       />
                     </div>
@@ -3357,7 +3528,7 @@ export default function App() {
                     rows={2}
                     value={newItemForm.specs}
                     onChange={(e) => setNewItemForm((p) => ({ ...p, specs: e.target.value }))}
-                    placeholder="650W, 80+ Bronze, DC-DC, PCIe 5.0 / ATX 3.0..."
+                    placeholder="1TB M.2 NVMe PCIe 4.0 x4, up to 6000 MB/s read..."
                     className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
                   />
                 </div>
@@ -3543,7 +3714,7 @@ export default function App() {
                     Minimum Primary Storage Baseline (GB)
                   </label>
                   <p className="text-[11px] text-slate-500 mb-2">
-                    Flags restricted OS/game storage footprint if SSD is smaller than this limit.
+                    Flags compact storage drives below this threshold and guides Auto-Builder SSD selection.
                   </p>
                   <input
                     type="number"
@@ -4149,7 +4320,7 @@ export default function App() {
     } else if (category === 'Memory') {
       generatedNote = `Kit Capacity: ${product.capacity || `${ram.perStickCapacity || 'Unknown'}GB per stick`} · Type: ${ram.type}.`;
     } else if (category === 'Storage') {
-      generatedNote = `Device: ${product.capacity || 'Unknown'} · Interface: ${product.interface_type || storage.driveClass}.`;
+      generatedNote = `Capacity: ${product.capacity || `${storage.capacityGB}GB`} · Interface: ${product.interface_type || storage.driveClass}.`;
     } else if (category === 'Power Supplies') {
       generatedNote = `SPL Tier: ${psu.splTier} · Wattage: ${psu.watts || 'Unknown'}W · Certification: ${psu.rating}.`;
     } else if (category === 'CPU Coolers') {
