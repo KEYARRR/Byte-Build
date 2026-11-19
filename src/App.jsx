@@ -3514,7 +3514,7 @@ export default function App() {
               </div>
               <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
                 <span className="text-[10px] text-slate-500 font-bold uppercase block">Validation</span>
-                <span className="text-lg font-black text-blue-400 font-mono">SPL Tier DSS</span>
+                <span className="text-lg font-black text-blue-400 font-mono">Hardware DSS</span>
               </div>
               <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
                 <span className="text-[10px] text-slate-500 font-bold uppercase block">Pre-Order SKUs</span>
