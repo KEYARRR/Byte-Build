@@ -182,112 +182,254 @@ const detectPartFormFactor = (part) => {
   return 'Standard';
 };
 
+const detectCpuCores = (part) => {
+  if (!part) return 0;
+  const combined = `${part?.name || ''} ${part?.specs || ''}`.toUpperCase();
+
+  const explicitCoreMatch = combined.match(/(\d{1,2})\s*[- ]?CORE/);
+  if (explicitCoreMatch) {
+    return Number(explicitCoreMatch[1]);
+  }
+
+  if (combined.includes('ATHLON') || combined.includes('200GE') || combined.includes('3000G')) return 2;
+  if (combined.includes('2200G') || combined.includes('3200G') || combined.includes('3400G') || combined.includes('12100') || combined.includes('13100') || combined.includes('14100') || combined.includes('I3-')) return 4;
+  if (
+    combined.includes('3600') ||
+    combined.includes('4500') ||
+    combined.includes('5500') ||
+    combined.includes('5600') ||
+    combined.includes('7500F') ||
+    combined.includes('7600') ||
+    combined.includes('8400F') ||
+    combined.includes('8500G') ||
+    combined.includes('8600G') ||
+    combined.includes('9600') ||
+    combined.includes('10400') ||
+    combined.includes('11400') ||
+    combined.includes('12400') ||
+    combined.includes('13400') ||
+    combined.includes('14400') ||
+    combined.includes('I5-124')
+  ) {
+    return 6;
+  }
+  if (
+    combined.includes('5700') ||
+    combined.includes('5800') ||
+    combined.includes('7700') ||
+    combined.includes('7800X3D') ||
+    combined.includes('8700G') ||
+    combined.includes('9700') ||
+    combined.includes('9800X3D')
+  ) {
+    return 8;
+  }
+  if (
+    combined.includes('12600') ||
+    combined.includes('13600') ||
+    combined.includes('14600') ||
+    combined.includes('7900') ||
+    combined.includes('9900')
+  ) {
+    return 12;
+  }
+  if (
+    combined.includes('5950') ||
+    combined.includes('7950') ||
+    combined.includes('9950') ||
+    combined.includes('12700') ||
+    combined.includes('13700') ||
+    combined.includes('14700') ||
+    combined.includes('I7-')
+  ) {
+    return 16;
+  }
+  if (
+    combined.includes('12900') ||
+    combined.includes('13900') ||
+    combined.includes('14900') ||
+    combined.includes('I9-')
+  ) {
+    return 24;
+  }
+
+  return 6;
+};
+
 const getCpuProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
+  const specs = String(part?.specs || '').toUpperCase();
+  const combined = `${name} ${specs}`;
   const tdpFromDb = Number(part?.tdp || 0);
+  const wattMatch = specs.match(/(\d{2,3})\s*W\s*(?:TDP|PPT|MAX)?/);
+  const parsedWatts = tdpFromDb || (wattMatch ? Number(wattMatch[1]) : 0);
   const score = Number(part?.hardware_score || 0);
-  if (!name) return { tier: 0, label: 'No CPU Selected', watts: 0, coolerNeed: 0 };
-  if (name.includes('ATHLON') || name.includes('200GE') || name.includes('3000G')) {
-    return { tier: 1, label: 'Entry APU', watts: tdpFromDb || 35, coolerNeed: 1 };
+
+  if (!name) return { tier: 0, label: 'No CPU Selected', watts: 0, peakWatts: 0, coolerNeed: 0 };
+
+  if (combined.includes('ATHLON') || combined.includes('200GE') || combined.includes('3000G')) {
+    return { tier: 1, label: 'Entry APU', watts: parsedWatts || 35, peakWatts: 45, coolerNeed: 1 };
   }
-  if (name.includes('2200G') || name.includes('3200G') || name.includes('3400G')) {
-    return { tier: 2, label: 'Entry APU', watts: tdpFromDb || 65, coolerNeed: 1 };
-  }
-  if (
-    name.includes('4500') ||
-    name.includes('5500') ||
-    name.includes('3600') ||
-    name.includes('10400') ||
-    name.includes('11400') ||
-    name.includes('12100')
-  ) {
-    return { tier: 3, label: 'Budget Gaming CPU', watts: tdpFromDb || 65, coolerNeed: 1 };
+  if (combined.includes('2200G') || combined.includes('3200G') || combined.includes('3400G')) {
+    return { tier: 2, label: 'Entry APU', watts: parsedWatts || 65, peakWatts: 88, coolerNeed: 1 };
   }
   if (
-    name.includes('5600') ||
-    name.includes('5700X') ||
-    name.includes('7500F') ||
-    name.includes('7600') ||
-    name.includes('12400') ||
-    name.includes('13400') ||
-    name.includes('14400')
+    combined.includes('4500') ||
+    combined.includes('5500') ||
+    combined.includes('3600') ||
+    combined.includes('10400') ||
+    combined.includes('11400') ||
+    combined.includes('12100') ||
+    combined.includes('13100') ||
+    combined.includes('14100')
   ) {
-    return { tier: 4, label: 'Mainstream Gaming CPU', watts: tdpFromDb || 90, coolerNeed: 2 };
+    return { tier: 3, label: 'Budget Gaming CPU', watts: parsedWatts || 65, peakWatts: 88, coolerNeed: 1 };
   }
   if (
-    name.includes('5800X') ||
-    name.includes('7700') ||
-    name.includes('7800X3D') ||
-    name.includes('9700') ||
-    name.includes('9800X3D') ||
-    name.includes('12700') ||
-    name.includes('13700') ||
-    name.includes('14700')
+    combined.includes('5600') ||
+    combined.includes('5700X') ||
+    combined.includes('7500F') ||
+    combined.includes('7600') ||
+    combined.includes('9600') ||
+    combined.includes('12400') ||
+    combined.includes('13400') ||
+    combined.includes('14400')
   ) {
-    return { tier: 5, label: 'Performance CPU', watts: tdpFromDb || 140, coolerNeed: 3 };
+    const isIntelHybrid = combined.includes('13400') || combined.includes('14400');
+    return {
+      tier: 4,
+      label: 'Mainstream Gaming CPU',
+      watts: parsedWatts || 65,
+      peakWatts: isIntelHybrid ? 148 : 95,
+      coolerNeed: 2,
+    };
   }
   if (
-    name.includes('7900') ||
-    name.includes('7950') ||
-    name.includes('9900') ||
-    name.includes('9950') ||
-    name.includes('12900') ||
-    name.includes('13900') ||
-    name.includes('14900')
+    combined.includes('5800X') ||
+    combined.includes('7700') ||
+    combined.includes('7800X3D') ||
+    combined.includes('9700') ||
+    combined.includes('9800X3D') ||
+    combined.includes('12600') ||
+    combined.includes('13600') ||
+    combined.includes('14600') ||
+    combined.includes('12700') ||
+    combined.includes('13700') ||
+    combined.includes('14700')
   ) {
-    return { tier: 6, label: 'Enthusiast Workstation CPU', watts: tdpFromDb || 180, coolerNeed: 4 };
+    const isIntelK =
+      combined.includes('12600') ||
+      combined.includes('13600') ||
+      combined.includes('14600') ||
+      combined.includes('12700') ||
+      combined.includes('13700') ||
+      combined.includes('14700');
+    return {
+      tier: 5,
+      label: 'Performance CPU',
+      watts: parsedWatts || (isIntelK ? 125 : 105),
+      peakWatts: isIntelK ? 235 : 155,
+      coolerNeed: 3,
+    };
   }
+  if (
+    combined.includes('7900') ||
+    combined.includes('7950') ||
+    combined.includes('9900') ||
+    combined.includes('9950') ||
+    combined.includes('12900') ||
+    combined.includes('13900') ||
+    combined.includes('14900')
+  ) {
+    const isIntelI9 = combined.includes('12900') || combined.includes('13900') || combined.includes('14900');
+    return {
+      tier: 6,
+      label: 'Enthusiast Workstation CPU',
+      watts: parsedWatts || (isIntelI9 ? 150 : 170),
+      peakWatts: isIntelI9 ? 285 : 230,
+      coolerNeed: 4,
+    };
+  }
+
+  const fallbackTdp = parsedWatts || 65;
   return {
     tier: score >= 85 ? 5 : score >= 75 ? 4 : score >= 60 ? 3 : 2,
     label: 'Standard Processor',
-    watts: tdpFromDb || 80,
+    watts: fallbackTdp,
+    peakWatts: Math.round(fallbackTdp * 1.35),
     coolerNeed: score >= 80 ? 3 : 2,
   };
 };
 
 const getGpuProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
+  const specs = String(part?.specs || '').toUpperCase();
+  const combined = `${name} ${specs}`;
   const wattsFromDb = Number(part?.wattage || part?.tdp || 0);
+  const wattMatch = specs.match(/(\d{2,3})\s*W/);
+  const parsedWatts = wattsFromDb || (wattMatch ? Number(wattMatch[1]) : 0);
   const score = Number(part?.hardware_score || 0);
+
   if (!name) return { tier: 0, label: 'No GPU Selected', watts: 0 };
-  if (name.includes('5090') || name.includes('4090') || name.includes('7900 XTX')) {
-    return { tier: 6, label: 'Extreme 4K GPU', watts: wattsFromDb || 450 };
-  }
-  if (name.includes('5080') || name.includes('4080') || name.includes('7900 XT')) {
-    return { tier: 5, label: 'High-End 1440p/4K GPU', watts: wattsFromDb || 350 };
-  }
-  if (
-    name.includes('5070') ||
-    name.includes('4070') ||
-    name.includes('7800 XT') ||
-    name.includes('B580')
-  ) {
-    return { tier: 4, label: 'Upper Mid-Range GPU', watts: wattsFromDb || 250 };
-  }
-  if (
-    name.includes('5060') ||
-    name.includes('4060') ||
-    name.includes('7600') ||
-    name.includes('RX 6600') ||
-    name.includes('ARC A750') ||
-    name.includes('2070 SUPER')
-  ) {
-    return { tier: 3, label: '1080p Mainstream GPU', watts: wattsFromDb || 180 };
-  }
-  if (
-    name.includes('1650') ||
-    name.includes('3050') ||
-    name.includes('6400') ||
-    name.includes('6500') ||
-    name.includes('GT 1030')
-  ) {
-    return { tier: 2, label: 'Entry-Level GPU', watts: wattsFromDb || 100 };
-  }
+
+  if (combined.includes('5090')) return { tier: 6, label: 'Extreme 4K GPU', watts: parsedWatts || 575 };
+  if (combined.includes('4090')) return { tier: 6, label: 'Extreme 4K GPU', watts: parsedWatts || 450 };
+  if (combined.includes('7900 XTX')) return { tier: 6, label: 'Extreme 4K GPU', watts: parsedWatts || 355 };
+
+  if (combined.includes('5080')) return { tier: 5, label: 'High-End 1440p/4K GPU', watts: parsedWatts || 360 };
+  if (combined.includes('4080')) return { tier: 5, label: 'High-End 1440p/4K GPU', watts: parsedWatts || 320 };
+  if (combined.includes('7900 XT')) return { tier: 5, label: 'High-End 1440p/4K GPU', watts: parsedWatts || 315 };
+  if (combined.includes('5070 TI')) return { tier: 5, label: 'High-End 1440p/4K GPU', watts: parsedWatts || 300 };
+
+  if (combined.includes('4070 TI')) return { tier: 4, label: 'Upper Mid-Range GPU', watts: parsedWatts || 285 };
+  if (combined.includes('5070')) return { tier: 4, label: 'Upper Mid-Range GPU', watts: parsedWatts || 250 };
+  if (combined.includes('4070 SUPER')) return { tier: 4, label: 'Upper Mid-Range GPU', watts: parsedWatts || 220 };
+  if (combined.includes('4070')) return { tier: 4, label: 'Upper Mid-Range GPU', watts: parsedWatts || 200 };
+  if (combined.includes('7800 XT')) return { tier: 4, label: 'Upper Mid-Range GPU', watts: parsedWatts || 263 };
+  if (combined.includes('7700 XT')) return { tier: 4, label: 'Upper Mid-Range GPU', watts: parsedWatts || 245 };
+  if (combined.includes('B580')) return { tier: 4, label: 'Upper Mid-Range GPU', watts: parsedWatts || 190 };
+
+  if (combined.includes('5060 TI')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 180 };
+  if (combined.includes('5060')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 145 };
+  if (combined.includes('4060 TI')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 165 };
+  if (combined.includes('4060')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 115 };
+  if (combined.includes('7600 XT')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 190 };
+  if (combined.includes('7600')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 165 };
+  if (combined.includes('RX 6600')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 132 };
+  if (combined.includes('3060 TI')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 200 };
+  if (combined.includes('3060')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 170 };
+  if (combined.includes('ARC A750')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 225 };
+  if (combined.includes('2070 SUPER')) return { tier: 3, label: '1080p Mainstream GPU', watts: parsedWatts || 215 };
+
+  if (combined.includes('3050 6GB')) return { tier: 2, label: 'Entry-Level GPU', watts: parsedWatts || 70 };
+  if (combined.includes('3050')) return { tier: 2, label: 'Entry-Level GPU', watts: parsedWatts || 130 };
+  if (combined.includes('1650')) return { tier: 2, label: 'Entry-Level GPU', watts: parsedWatts || 75 };
+  if (combined.includes('6500')) return { tier: 2, label: 'Entry-Level GPU', watts: parsedWatts || 107 };
+  if (combined.includes('6400')) return { tier: 2, label: 'Entry-Level GPU', watts: parsedWatts || 53 };
+  if (combined.includes('GT 1030')) return { tier: 2, label: 'Entry-Level GPU', watts: parsedWatts || 30 };
+
   return {
     tier: score >= 85 ? 5 : score >= 75 ? 4 : score >= 60 ? 3 : 2,
     label: 'Dedicated Graphics',
-    watts: wattsFromDb || 180,
+    watts: parsedWatts || 170,
   };
+};
+
+// ASUS ROG & Corsair CPU x GPU Tier Recommended PSU Matrix
+const getBrandMatrixPsuWatts = (cpuTier, gpuTier, isOverclocked) => {
+  let base = 450;
+  if (gpuTier >= 6) base = 1000;
+  else if (gpuTier === 5) base = 850;
+  else if (gpuTier === 4) base = 750;
+  else if (gpuTier === 3) base = 550;
+  else if (gpuTier === 2) base = 450;
+
+  if (cpuTier >= 6) base += 150;
+  else if (cpuTier === 5) base += 100;
+  else if (cpuTier === 4 && gpuTier >= 4) base += 50;
+
+  if (isOverclocked) base += 100;
+  return Math.ceil(base / 50) * 50;
 };
 
 const getMotherboardProfile = (part) => {
@@ -412,8 +554,12 @@ const getPsuProfile = (part) => {
   const wattMatch = name.match(/(\d{3,4})\s*W/);
   const watts = Number(part?.wattage || 0) || (wattMatch ? Number(wattMatch[1]) : 0);
 
-  const rating = name.includes('GOLD')
+  const rating = name.includes('PLATINUM')
+    ? '80+ Platinum'
+    : name.includes('GOLD')
     ? '80+ Gold'
+    : name.includes('SILVER')
+    ? '80+ Silver'
     : name.includes('BRONZE')
     ? '80+ Bronze'
     : name.includes('WHITE')
@@ -434,7 +580,8 @@ const getPsuProfile = (part) => {
       name.includes('MPG A850G') ||
       name.includes('MEG AI') ||
       name.includes('DARK POWER 13') ||
-      name.includes('ROG THOR')
+      name.includes('ROG THOR') ||
+      name.includes('ROG LOKI')
     ) {
       splTier = 'A+';
     } else if (
@@ -460,7 +607,7 @@ const getPsuProfile = (part) => {
       name.includes('MWE V2') ||
       name.includes('CX650M') ||
       name.includes('CX750M') ||
-      name.includes('TUF GAMING BRONZE') ||
+      name.includes('TUF GAMING') ||
       name.includes('B12 BC') ||
       name.includes('G12 GC') ||
       name.includes('HYDRO K PRO')
@@ -729,8 +876,9 @@ export default function App() {
   const [sortBy, setSortBy] = useState('price-asc');
   const [showSoldOut, setShowSoldOut] = useState(false);
 
-  // Workload Wattage Discretion Mode ('Gaming' | 'Rendering' | 'Scrolling')
-  const [workloadUsageMode, setWorkloadUsageMode] = useState('Gaming');
+  // ASUS ROG / Corsair Power Calculator States
+  const [overclockEnabled, setOverclockEnabled] = useState(false);
+  const [powerDisplayView, setPowerDisplayView] = useState('load'); // 'idle' | 'load'
 
   // Smart Build Assistant States
   const [assistantBudget, setAssistantBudget] = useState(40000);
@@ -1262,6 +1410,10 @@ export default function App() {
 
   const activeRamCount = selectedBuild.Memory ? selectedRamCount : existingRamCount;
 
+  const cpuCores = useMemo(
+    () => detectCpuCores(effectiveParts.Processors),
+    [effectiveParts.Processors]
+  );
   const cpuProfile = getCpuProfile(effectiveParts.Processors);
   const gpuProfile = getGpuProfile(effectiveParts['Video Cards']);
   const motherboardProfile = useMemo(() => getMotherboardProfile(effectiveParts.Motherboards), [effectiveParts.Motherboards]);
@@ -1274,68 +1426,175 @@ export default function App() {
   const cpuSocket = detectCpuSocket(effectiveParts.Processors);
   const motherboardSocket = detectMotherboardSocket(effectiveParts.Motherboards);
 
-  // Scenario Wattage Breakdown: Scrolling vs. Gaming vs. Rendering
-  const wattageBreakdown = useMemo(() => {
-    const hasAnyPart = cpuProfile.watts > 0 || gpuProfile.watts > 0;
-    if (!hasAnyPart) {
+  // Deterministic Component-Level Power Draw Calculation (ASUS ROG & Corsair Methodology)
+  const powerMetrics = useMemo(() => {
+    const hasAnyComponent =
+      selectedItems.length > 0 ||
+      Boolean(effectiveParts.Processors) ||
+      Boolean(effectiveParts.Motherboards) ||
+      Boolean(effectiveParts['Video Cards']) ||
+      Boolean(effectiveParts.Memory) ||
+      Boolean(effectiveParts.Storage) ||
+      Boolean(effectiveParts['Power Supplies']) ||
+      Boolean(effectiveParts['CPU Coolers']) ||
+      Boolean(effectiveParts.Cases);
+
+    if (!hasAnyComponent) {
       return {
-        scrolling: 0,
-        gaming: 0,
-        rendering: 0,
-        peakOnLoad: 0,
+        idleWatts: 0,
+        stockLoadWatts: 0,
+        ocLoadWatts: 0,
+        activeLoadWatts: 0,
+        recommendedPsuWatts: 0,
+        partsBreakdown: {
+          cpuIdle: 0,
+          cpuLoad: 0,
+          gpuIdle: 0,
+          gpuLoad: 0,
+          boardRamStorageIdle: 0,
+          boardRamStorageLoad: 0,
+          coolingFansIdle: 0,
+          coolingFansLoad: 0,
+        },
       };
     }
 
-    const basePlatformDraw = 25; // Motherboard + RAM + SSD + Fans baseline
-    const cpuDraw = cpuProfile.watts;
-    const gpuDraw = gpuProfile.watts;
+    // 1. CPU Idle & Peak Package Power (scaled by core count + TDP/PPT)
+    const cpuIdle = effectiveParts.Processors
+      ? Math.round(Math.max(6, cpuCores * 1.3 + cpuProfile.watts * 0.05))
+      : 0;
+    const cpuStockLoad = effectiveParts.Processors ? cpuProfile.peakWatts : 0;
+    const cpuOcLoad = effectiveParts.Processors ? Math.round(cpuProfile.peakWatts * 1.22) : 0;
 
-    // Scrolling / Browsing / Light Desktop: CPU & GPU mostly at low-power states
-    const scrollingWatts = Math.round(
-      basePlatformDraw +
-        (cpuDraw > 0 ? Math.max(10, cpuDraw * 0.16) : 0) +
-        (gpuDraw > 0 ? Math.max(10, gpuDraw * 0.08) : 0)
+    // 2. GPU Idle & Peak TBP Power
+    const gpuIdle = effectiveParts['Video Cards']
+      ? Math.round(Math.max(8, gpuProfile.watts * 0.055 + gpuProfile.tier * 1.5))
+      : 0;
+    const gpuStockLoad = effectiveParts['Video Cards'] ? gpuProfile.watts : 0;
+    const gpuOcLoad = effectiveParts['Video Cards'] ? Math.round(gpuProfile.watts * 1.15) : 0;
+
+    // 3. Motherboard Chipset & VRM Overhead
+    const boardIdle = effectiveParts.Motherboards
+      ? motherboardProfile.tier === 'Enthusiast'
+        ? 16
+        : motherboardProfile.tier === 'Mainstream'
+        ? 12
+        : 8
+      : 0;
+    const boardStockLoad = effectiveParts.Motherboards
+      ? motherboardProfile.tier === 'Enthusiast'
+        ? 38
+        : motherboardProfile.tier === 'Mainstream'
+        ? 26
+        : 18
+      : 0;
+    const boardOcLoad = Math.round(boardStockLoad * 1.15);
+
+    // 4. Memory Sticks & DDR4/DDR5 Voltage
+    const sticks = Math.max(1, ramProfile.stickCount || 2);
+    const isDdr5 = ramProfile.type === 'DDR5';
+    const ramIdle = effectiveParts.Memory ? Math.round(sticks * (isDdr5 ? 2.2 : 1.5)) : 0;
+    const ramStockLoad = effectiveParts.Memory ? Math.round(sticks * (isDdr5 ? 6 : 4)) : 0;
+    const ramOcLoad = effectiveParts.Memory ? Math.round(ramStockLoad * 1.15) : 0;
+
+    // 5. Storage Drive Class
+    const storageIdle = effectiveParts.Storage
+      ? storageProfile.isHdd
+        ? 4
+        : storageProfile.isSataSsd
+        ? 1
+        : 1.5
+      : 0;
+    const storageLoad = effectiveParts.Storage
+      ? storageProfile.isHdd
+        ? 10
+        : storageProfile.isSataSsd
+        ? 4
+        : storageProfile.driveClass === 'Gen4 NVMe'
+        ? 7
+        : 5
+      : 0;
+
+    // 6. CPU Cooler Pump/Fans & Case Airflow Fans
+    const coolerIdle = effectiveParts['CPU Coolers']
+      ? coolerProfile.tier >= 3
+        ? 6
+        : 2
+      : 0;
+    const coolerLoad = effectiveParts['CPU Coolers']
+      ? coolerProfile.tier === 4
+        ? 18
+        : coolerProfile.tier === 3
+        ? 13
+        : coolerProfile.tier === 2
+        ? 6
+        : 3
+      : 0;
+
+    const caseIdle = effectiveParts.Cases ? (caseProfile.airflow ? 4 : 2) : 0;
+    const caseLoad = effectiveParts.Cases ? (caseProfile.airflow ? 12 : 6) : 0;
+
+    const boardRamStorageIdle = Math.round(boardIdle + ramIdle + storageIdle);
+    const boardRamStorageStockLoad = Math.round(boardStockLoad + ramStockLoad + storageLoad);
+    const boardRamStorageOcLoad = Math.round(boardOcLoad + ramOcLoad + storageLoad);
+
+    const coolingFansIdle = Math.round(coolerIdle + caseIdle);
+    const coolingFansLoad = Math.round(coolerLoad + caseLoad);
+
+    const idleWatts = cpuIdle + gpuIdle + boardRamStorageIdle + coolingFansIdle;
+    const stockLoadWatts = cpuStockLoad + gpuStockLoad + boardRamStorageStockLoad + coolingFansLoad;
+    const ocLoadWatts = cpuOcLoad + gpuOcLoad + boardRamStorageOcLoad + coolingFansLoad;
+
+    const activeLoadWatts = overclockEnabled ? ocLoadWatts : stockLoadWatts;
+    const transientBuffer = Number(dssRules.psuBufferWatts || 120);
+    const matrixFloor = getBrandMatrixPsuWatts(
+      cpuProfile.tier,
+      gpuProfile.tier,
+      overclockEnabled
     );
-
-    // Gaming Load: GPU typically hits ~85-95% peak while CPU runs ~55-70%
-    const gamingWatts = Math.round(
-      basePlatformDraw +
-        (cpuDraw > 0 ? cpuDraw * 0.65 : 0) +
-        (gpuDraw > 0 ? gpuDraw * 0.92 : 0)
-    );
-
-    // Rendering / Heavy Multi-Core Compute: CPU hits ~95-100% sustained, GPU ~65-80% (or ~90% if GPU-accelerated)
-    const renderingWatts = Math.round(
-      basePlatformDraw +
-        (cpuDraw > 0 ? cpuDraw * 0.98 : 0) +
-        (gpuDraw > 0 ? gpuDraw * 0.72 : 0)
-    );
-
-    const peakOnLoad = Math.max(gamingWatts, renderingWatts);
+    const calculatedPsuStep = Math.ceil((activeLoadWatts + transientBuffer) / 50) * 50;
+    const recommendedPsuWatts = Math.max(matrixFloor, calculatedPsuStep);
 
     return {
-      scrolling: scrollingWatts,
-      gaming: gamingWatts,
-      rendering: renderingWatts,
-      peakOnLoad,
+      idleWatts,
+      stockLoadWatts,
+      ocLoadWatts,
+      activeLoadWatts,
+      recommendedPsuWatts,
+      partsBreakdown: {
+        cpuIdle,
+        cpuLoad: overclockEnabled ? cpuOcLoad : cpuStockLoad,
+        gpuIdle,
+        gpuLoad: overclockEnabled ? gpuOcLoad : gpuStockLoad,
+        boardRamStorageIdle,
+        boardRamStorageLoad: overclockEnabled ? boardRamStorageOcLoad : boardRamStorageStockLoad,
+        coolingFansIdle,
+        coolingFansLoad,
+      },
     };
-  }, [cpuProfile.watts, gpuProfile.watts]);
+  }, [
+    selectedItems.length,
+    effectiveParts,
+    cpuCores,
+    cpuProfile.watts,
+    cpuProfile.peakWatts,
+    cpuProfile.tier,
+    gpuProfile.watts,
+    gpuProfile.tier,
+    motherboardProfile.tier,
+    ramProfile.stickCount,
+    ramProfile.type,
+    storageProfile.isHdd,
+    storageProfile.isSataSsd,
+    storageProfile.driveClass,
+    coolerProfile.tier,
+    caseProfile.airflow,
+    overclockEnabled,
+    dssRules.psuBufferWatts,
+  ]);
 
-  const activeScenarioWatts = useMemo(() => {
-    if (workloadUsageMode === 'Scrolling') return wattageBreakdown.scrolling;
-    if (workloadUsageMode === 'Rendering') return wattageBreakdown.rendering;
-    return wattageBreakdown.gaming;
-  }, [workloadUsageMode, wattageBreakdown]);
-
-  const totalSystemWattage = useMemo(() => {
-    if (cpuProfile.watts === 0 && gpuProfile.watts === 0) return 0;
-    return cpuProfile.watts + gpuProfile.watts + Number(dssRules.psuBufferWatts || 120);
-  }, [cpuProfile.watts, gpuProfile.watts, dssRules.psuBufferWatts]);
-
-  const recommendedPsuWatts = useMemo(() => {
-    if (totalSystemWattage === 0) return 0;
-    return Math.ceil(totalSystemWattage / 50) * 50;
-  }, [totalSystemWattage]);
+  const totalSystemWattage = powerMetrics.activeLoadWatts;
+  const recommendedPsuWatts = powerMetrics.recommendedPsuWatts;
 
   const dssIssues = useMemo(() => {
     const issues = [];
@@ -1363,7 +1622,7 @@ export default function App() {
         category: 'Power Delivery',
         severity: 'warning',
         title: 'Motherboard VRM Throttle Risk',
-        message: `${cpu.name} (${cpuProfile.watts}W package power) is paired with an entry chipset (${board.name}). Unheatsinked VRMs will overheat under load.`,
+        message: `${cpu.name} (${cpuProfile.peakWatts}W peak package power) is paired with an entry chipset (${board.name}). Unheatsinked VRMs will overheat under load.`,
         action: 'Upgrade to a B-series or Z/X-series motherboard with heatsinked power phases.',
       });
     }
@@ -1482,7 +1741,7 @@ export default function App() {
           category: 'Power Supply',
           severity: 'critical',
           title: 'Insufficient Power Supply Headroom',
-          message: `System peak load requires at least ${recommendedPsuWatts}W (Gaming: ~${wattageBreakdown.gaming}W · Rendering: ~${wattageBreakdown.rendering}W). Current unit (${psuProfile.watts}W · SPL Tier ${psuProfile.splTier}) risks shutdown under heavy load.`,
+          message: `${overclockEnabled ? 'Overclocked' : 'Stock'} system load is ${powerMetrics.activeLoadWatts}W (Idle: ${powerMetrics.idleWatts}W) and requires at least a ${recommendedPsuWatts}W PSU. Current unit (${psuProfile.watts}W · SPL Tier ${psuProfile.splTier}) risks shutdown during transient GPU spikes.`,
           action: `Select a Tier ${gpuProfile.tier >= 5 ? 'B/A' : 'C+'} power supply rated at ${recommendedPsuWatts}W or higher.`,
         });
       } else if (psuProfile.tierRank < requiredTierRank) {
@@ -1563,7 +1822,8 @@ export default function App() {
     caseProfile,
     motherboardProfile,
     recommendedPsuWatts,
-    wattageBreakdown,
+    powerMetrics,
+    overclockEnabled,
     activePage,
     dssRules,
   ]);
@@ -1598,15 +1858,15 @@ export default function App() {
       return {
         title: 'System Validator Ready',
         tone: 'neutral',
-        summary: 'Select existing or proposed components to analyze socket pinouts, RAM channels, SPL PSU tiers, workload wattage (scrolling, gaming, rendering), and thermal tolerances.',
+        summary: 'Select existing or proposed components to analyze socket pinouts, RAM channels, SPL PSU tiers, component-level power draw (Idle vs. Stock/OC Load), and thermal tolerances.',
       };
     }
     return {
       title: 'Platform Architecture Verified',
       tone: 'success',
-      summary: `All platform criteria cleared.\n• Socket: ${cpuSocket || 'Validated'}\n• SPL PSU Tier: ${effectiveParts['Power Supplies'] ? `Tier ${psuProfile.splTier}` : 'Pending'}\n• Workload Draw: ~${wattageBreakdown.scrolling}W Scrolling · ~${wattageBreakdown.gaming}W Gaming · ~${wattageBreakdown.rendering}W Rendering.`,
+      summary: `All platform criteria cleared.\n• Socket: ${cpuSocket || 'Validated'}\n• SPL PSU Tier: ${effectiveParts['Power Supplies'] ? `Tier ${psuProfile.splTier}` : 'Pending'}\n• Power Draw: ${powerMetrics.idleWatts}W Idle · ${powerMetrics.activeLoadWatts}W ${overclockEnabled ? 'OC' : 'Stock'} Load (Rec PSU: ${recommendedPsuWatts}W).`,
     };
-  }, [dssIssues, selectedItems, existingPc, cpuSocket, effectiveParts, psuProfile, wattageBreakdown]);
+  }, [dssIssues, selectedItems, existingPc, cpuSocket, effectiveParts, psuProfile, powerMetrics, overclockEnabled, recommendedPsuWatts]);
 
   const compatibilityScore = useMemo(() => {
     let score = 100;
@@ -1921,14 +2181,18 @@ export default function App() {
       selectedBuild.Cases?.id
     );
 
-    const estWatts =
-      getCpuProfile(chosenCpu).watts +
-      getGpuProfile(chosenGpu).watts +
+    const cpuInfo = getCpuProfile(chosenCpu);
+    const gpuInfo = getGpuProfile(chosenGpu);
+    const matrixFloor = getBrandMatrixPsuWatts(cpuInfo.tier, gpuInfo.tier, overclockEnabled);
+    const rawLoad =
+      cpuInfo.peakWatts +
+      gpuInfo.watts +
+      45 +
       Number(dssRules.psuBufferWatts || 120);
-    const minSafeWatts = Math.ceil(estWatts / 50) * 50;
+    const minSafeWatts = Math.max(matrixFloor, Math.ceil(rawLoad / 50) * 50);
 
     const minSplRank =
-      getGpuProfile(chosenGpu).tier >= 5 || getCpuProfile(chosenCpu).tier >= 5
+      gpuInfo.tier >= 5 || cpuInfo.tier >= 5
         ? 4
         : 3;
 
@@ -2052,8 +2316,8 @@ export default function App() {
   </table>
   <div style="margin-top:16px;padding:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
     <div>
-      <div style="font-size:12px;color:#475569;">Compatibility Score: <strong>${compatibilityScore}%</strong> · Est. Load: <strong>${totalSystemWattage}W</strong> (Rec. PSU: ${recommendedPsuWatts}W)</div>
-      <div style="font-size:11px;color:#64748b;margin-top:2px;">Scrolling: ~${wattageBreakdown.scrolling}W · Gaming: ~${wattageBreakdown.gaming}W · Rendering: ~${wattageBreakdown.rendering}W</div>
+      <div style="font-size:12px;color:#475569;">Compatibility Score: <strong>${compatibilityScore}%</strong> · Rec. PSU: <strong>${recommendedPsuWatts}W</strong></div>
+      <div style="font-size:11px;color:#64748b;margin-top:2px;">Idle Draw: ${powerMetrics.idleWatts}W · Stock Load: ${powerMetrics.stockLoadWatts}W · OC Load: ${powerMetrics.ocLoadWatts}W</div>
     </div>
     <div style="font-size:20px;font-weight:900;color:#1e3a8a;font-family:sans-serif;">${peso(totalPrice)}</div>
   </div>
@@ -2597,13 +2861,15 @@ export default function App() {
   );
 
   const renderBuildSummary = () => {
-    const psuCapacity = psuProfile.watts || recommendedPsuWatts || 650;
+    const displayedWatts =
+      powerDisplayView === 'idle'
+        ? powerMetrics.idleWatts
+        : powerMetrics.activeLoadWatts;
+    const psuCap = psuProfile.watts || recommendedPsuWatts || 650;
     const loadPercent =
-      activeScenarioWatts > 0
-        ? Math.min((activeScenarioWatts / psuCapacity) * 100, 100)
-        : 0;
-    const isOverScenario =
-      psuProfile.watts > 0 && activeScenarioWatts > psuProfile.watts;
+      displayedWatts > 0 ? Math.min((displayedWatts / psuCap) * 100, 100) : 0;
+    const isOverPsuCap =
+      psuProfile.watts > 0 && powerMetrics.activeLoadWatts > psuProfile.watts;
 
     return (
       <div
@@ -2764,23 +3030,45 @@ export default function App() {
 
         <div className="mt-2.5 pt-2 border-t border-[#1f293d] print-summary-box">
           <div className="mb-2 p-2 rounded bg-[#0b0f19] border border-[#1f293d] space-y-1.5 print:hidden">
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
-                Workload Draw
-              </span>
+            <div className="flex flex-wrap items-center justify-between gap-1">
               <div className="flex items-center gap-1 bg-[#111827] p-0.5 rounded border border-[#1f293d]">
-                {['Scrolling', 'Gaming', 'Rendering'].map((mode) => (
+                {[
+                  { id: 'idle', label: 'Idle' },
+                  { id: 'load', label: 'Peak Load' },
+                ].map((tab) => (
                   <button
-                    key={mode}
+                    key={tab.id}
                     type="button"
-                    onClick={() => setWorkloadUsageMode(mode)}
+                    onClick={() => setPowerDisplayView(tab.id)}
                     className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
-                      workloadUsageMode === mode
+                      powerDisplayView === tab.id
                         ? 'bg-blue-600 text-white'
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    {mode}
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1 bg-[#111827] p-0.5 rounded border border-[#1f293d]">
+                {[
+                  { oc: false, label: 'Stock' },
+                  { oc: true, label: 'Overclocked' },
+                ].map((mode) => (
+                  <button
+                    key={mode.label}
+                    type="button"
+                    onClick={() => setOverclockEnabled(mode.oc)}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
+                      overclockEnabled === mode.oc
+                        ? mode.oc
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-emerald-700 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    {mode.label}
                   </button>
                 ))}
               </div>
@@ -2788,37 +3076,72 @@ export default function App() {
 
             <div className="flex justify-between items-center text-[11px]">
               <span className="text-slate-300 font-semibold">
-                {workloadUsageMode}:{' '}
-                <strong className="text-white font-mono">~{activeScenarioWatts}W</strong>
+                {powerDisplayView === 'idle'
+                  ? 'Idle Draw'
+                  : `${overclockEnabled ? 'OC' : 'Stock'} Load`}:{' '}
+                <strong className="text-white font-mono">{displayedWatts}W</strong>
               </span>
               <span className="text-[10px] text-slate-400 font-mono">
-                Peak Cap: {totalSystemWattage}W · Rec PSU: {recommendedPsuWatts || '--'}W
+                Rec PSU: {recommendedPsuWatts ? `${recommendedPsuWatts}W` : '--'}
               </span>
             </div>
 
             <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
               <div
                 className={`h-full transition-all duration-200 ${
-                  isOverScenario ? 'bg-red-500' : 'bg-blue-500'
+                  isOverPsuCap ? 'bg-red-500' : 'bg-blue-500'
                 }`}
                 style={{ width: `${loadPercent}%` }}
               ></div>
             </div>
 
-            <div className="grid grid-cols-3 gap-1 pt-0.5 text-[9px] text-slate-400 font-mono">
+            <div className="grid grid-cols-3 gap-1 text-[9px] text-slate-400 font-mono">
               <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
-                <span>Scroll</span>
-                <strong className="text-slate-200">{wattageBreakdown.scrolling}W</strong>
+                <span>Idle</span>
+                <strong className="text-slate-200">{powerMetrics.idleWatts}W</strong>
               </div>
               <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
-                <span>Gaming</span>
-                <strong className="text-emerald-300">{wattageBreakdown.gaming}W</strong>
+                <span>Stock</span>
+                <strong className="text-emerald-300">{powerMetrics.stockLoadWatts}W</strong>
               </div>
               <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
-                <span>Render</span>
-                <strong className="text-blue-300">{wattageBreakdown.rendering}W</strong>
+                <span>OC</span>
+                <strong className="text-amber-300">{powerMetrics.ocLoadWatts}W</strong>
               </div>
             </div>
+
+            {displayedWatts > 0 && (
+              <div className="text-[9px] text-slate-500 font-mono flex flex-wrap justify-between gap-x-2 gap-y-0.5 pt-0.5 border-t border-[#1f293d]/60">
+                <span>
+                  CPU ({cpuCores}c):{' '}
+                  {powerDisplayView === 'idle'
+                    ? powerMetrics.partsBreakdown.cpuIdle
+                    : powerMetrics.partsBreakdown.cpuLoad}
+                  W
+                </span>
+                <span>
+                  GPU:{' '}
+                  {powerDisplayView === 'idle'
+                    ? powerMetrics.partsBreakdown.gpuIdle
+                    : powerMetrics.partsBreakdown.gpuLoad}
+                  W
+                </span>
+                <span>
+                  Board/RAM/SSD:{' '}
+                  {powerDisplayView === 'idle'
+                    ? powerMetrics.partsBreakdown.boardRamStorageIdle
+                    : powerMetrics.partsBreakdown.boardRamStorageLoad}
+                  W
+                </span>
+                <span>
+                  Cooler/Fans:{' '}
+                  {powerDisplayView === 'idle'
+                    ? powerMetrics.partsBreakdown.coolingFansIdle
+                    : powerMetrics.partsBreakdown.coolingFansLoad}
+                  W
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex justify-between items-center">
@@ -3077,7 +3400,7 @@ export default function App() {
                 Configure, Upgrade, and Quote Your Next Desktop.
               </h2>
               <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-                Use the Smart Build Assistant to generate Recommended System Builds with SPL PSU tier validation, workload wattage estimation, and formal quotations.
+                Use the Smart Build Assistant to generate Recommended System Builds with SPL PSU tier validation, component-level Stock/OC wattage calculation, and formal quotations.
               </p>
               <div className="mt-5 flex flex-wrap gap-2.5">
                 <button
@@ -3680,7 +4003,7 @@ export default function App() {
                     PSU Transient Headroom Buffer (Watts)
                   </label>
                   <p className="text-[11px] text-slate-500 mb-2">
-                    Added to CPU + GPU TDP to compute minimum safe power supply capacity.
+                    Added to active component load to size minimum safe PSU wattage.
                   </p>
                   <input
                     type="number"
@@ -4302,6 +4625,7 @@ export default function App() {
     if (!selectedProduct) return null;
     const product = selectedProduct;
     const category = product.category;
+    const cores = detectCpuCores(product);
     const cpu = getCpuProfile(product);
     const gpu = getGpuProfile(product);
     const ram = getRamProfile(product, 2);
@@ -4312,11 +4636,11 @@ export default function App() {
 
     let generatedNote = 'Standard hardware specification.';
     if (category === 'Processors') {
-      generatedNote = `${cpu.label} · Socket: ${product.socket || detectCpuSocket(product) || 'Unknown'} · TDP: ${cpu.watts || product.tdp || 'Unknown'}W.`;
+      generatedNote = `${cpu.label} (${cores}-Core) · Socket: ${product.socket || detectCpuSocket(product) || 'Unknown'} · Base TDP: ${cpu.watts}W · Peak Package: ${cpu.peakWatts}W.`;
     } else if (category === 'Motherboards') {
       generatedNote = `Platform: ${product.socket || detectMotherboardSocket(product) || 'Unknown'} · Chipset: ${product.chipset || 'Unknown'} · Memory: ${product.memory_type || 'Unknown'}.`;
     } else if (category === 'Video Cards') {
-      generatedNote = `${gpu.label} · Board Power: ${gpu.watts || product.wattage || 'Unknown'}W.`;
+      generatedNote = `${gpu.label} · Board Power (TBP): ${gpu.watts}W.`;
     } else if (category === 'Memory') {
       generatedNote = `Kit Capacity: ${product.capacity || `${ram.perStickCapacity || 'Unknown'}GB per stick`} · Type: ${ram.type}.`;
     } else if (category === 'Storage') {
