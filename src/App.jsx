@@ -46,6 +46,16 @@ const DEFAULT_DSS_RULES = {
   creatorCpuWeight: 27,
 };
 
+const SPL_TIER_RANK = {
+  'A+': 6,
+  A: 5,
+  B: 4,
+  C: 3,
+  D: 2,
+  E: 1,
+  F: 0,
+};
+
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
 
 const peso = (value) =>
@@ -349,10 +359,12 @@ const getStorageProfile = (part) => {
   };
 };
 
+// SPL PSU Tier List Profile Resolver
 const getPsuProfile = (part) => {
   const name = String(part?.name || '').toUpperCase();
   const wattMatch = name.match(/(\d{3,4})\s*W/);
   const watts = Number(part?.wattage || 0) || (wattMatch ? Number(wattMatch[1]) : 0);
+
   const rating = name.includes('GOLD')
     ? '80+ Gold'
     : name.includes('BRONZE')
@@ -360,7 +372,95 @@ const getPsuProfile = (part) => {
     : name.includes('WHITE')
     ? '80+ White'
     : 'Unrated / Generic';
-  return { watts, rating, isGeneric: rating === 'Unrated / Generic' };
+
+  let splTier = String(part?.psu_tier || '').trim().toUpperCase();
+
+  if (!splTier && name) {
+    if (
+      name.includes('RM1000X') ||
+      name.includes('RM850X') ||
+      name.includes('RM750X') ||
+      name.includes('VERTEX') ||
+      name.includes('PRIME TX') ||
+      name.includes('PRIME PX') ||
+      name.includes('MPG A1000G') ||
+      name.includes('MPG A850G') ||
+      name.includes('MEG AI') ||
+      name.includes('DARK POWER 13') ||
+      name.includes('ROG THOR')
+    ) {
+      splTier = 'A+';
+    } else if (
+      name.includes('RMX') ||
+      name.includes('RME') ||
+      name.includes('SF750') ||
+      name.includes('SF850') ||
+      name.includes('FOCUS GX') ||
+      name.includes('FOCUS PX') ||
+      name.includes('MPG A') ||
+      name.includes('MAG A850GL') ||
+      name.includes('MAG A750GL') ||
+      name.includes('CORE REACTOR') ||
+      name.includes('NGDP') ||
+      name.includes('HYDRO G PRO') ||
+      name.includes('TOUGHPOWER GF3') ||
+      name.includes('ROG STRIX')
+    ) {
+      splTier = 'A';
+    } else if (
+      name.includes('MWE GOLD') ||
+      name.includes('MWE BRONZE V2') ||
+      name.includes('MWE V2') ||
+      name.includes('CX650M') ||
+      name.includes('CX750M') ||
+      name.includes('TUF GAMING BRONZE') ||
+      name.includes('B12 BC') ||
+      name.includes('G12 GC') ||
+      name.includes('HYDRO K PRO')
+    ) {
+      splTier = 'B';
+    } else if (
+      name.includes('A550BN') ||
+      name.includes('A650BN') ||
+      name.includes('A750BN') ||
+      name.includes('CX550') ||
+      name.includes('CX650') ||
+      name.includes('CV550') ||
+      name.includes('CV650') ||
+      name.includes('HV PRO') ||
+      name.includes('PK550D') ||
+      name.includes('PK650D') ||
+      name.includes('P550B') ||
+      name.includes('P650B') ||
+      rating === '80+ Bronze'
+    ) {
+      splTier = 'C';
+    } else if (
+      name.includes('GENERIC') ||
+      name.includes('INPLAY') ||
+      name.includes('YGT') ||
+      name.includes('KEYTECH') ||
+      name.includes('OVATION') ||
+      name.includes('BOSSTON') ||
+      name.includes('P750GM') ||
+      name.includes('P850GM') ||
+      name.includes('UNRATED')
+    ) {
+      splTier = 'F';
+    } else {
+      splTier = rating === '80+ Gold' ? 'B' : rating === 'Unrated / Generic' ? 'F' : 'D';
+    }
+  }
+
+  const tierRank = splTier in SPL_TIER_RANK ? SPL_TIER_RANK[splTier] : 3;
+
+  return {
+    watts,
+    rating,
+    splTier: splTier || 'Unlisted',
+    tierRank,
+    isGeneric: rating === 'Unrated / Generic' || tierRank <= 1,
+  };
 };
 
 const getCoolerProfile = (part) => {
@@ -657,6 +757,7 @@ export default function App() {
     socket: '',
     memory_type: '',
     form_factor: '',
+    psu_tier: '',
     hardware_score: 78,
     specs: '',
   });
@@ -666,7 +767,6 @@ export default function App() {
     return ADMIN_EMAILS.includes(currentUser.email.toLowerCase());
   }, [currentUser]);
 
-  // Secret Keyboard Shortcut (Ctrl + Shift + A) to open Admin Lock screen
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'a') {
@@ -678,7 +778,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Secret 5-Tap Logo Handler (Works on Mobile APK & Desktop)
   const handleLogoClick = () => {
     setActivePage('home');
     setLogoTapCount((prev) => {
@@ -691,7 +790,6 @@ export default function App() {
     });
   };
 
-  // Dedicated Admin Logout / Lock Handler
   const handleAdminLogout = () => {
     setAdminUnlocked(false);
     setAdminPinInput('');
@@ -699,7 +797,6 @@ export default function App() {
     setActivePage('home');
   };
 
-  // URL Hash Recovery Guard & Auth State Listener
   useEffect(() => {
     const checkRecoveryState = () => {
       const hash = window.location.hash;
@@ -936,7 +1033,6 @@ export default function App() {
     setActivePage('home');
   };
 
-  // Admin Database CRUD Handlers
   const handleAdminAddItem = async (e, targetType = 'catalog') => {
     e.preventDefault();
     setAdminSaving(true);
@@ -956,6 +1052,7 @@ export default function App() {
         socket: newItemForm.socket.trim() || null,
         memory_type: newItemForm.memory_type.trim() || null,
         form_factor: newItemForm.form_factor.trim() || null,
+        psu_tier: newItemForm.psu_tier.trim() || null,
         hardware_score: Number(newItemForm.hardware_score) || 75,
         specs: newItemForm.specs.trim() || 'Standard specification',
       };
@@ -981,6 +1078,7 @@ export default function App() {
         socket: '',
         memory_type: '',
         form_factor: '',
+        psu_tier: '',
         hardware_score: 78,
         specs: '',
       });
@@ -1013,6 +1111,7 @@ export default function App() {
         socket: editingItem.socket || null,
         memory_type: editingItem.memory_type || null,
         form_factor: editingItem.form_factor || null,
+        psu_tier: editingItem.psu_tier || null,
         hardware_score: Number(editingItem.hardware_score || 75),
         specs: editingItem.specs || '',
       };
@@ -1257,22 +1356,39 @@ export default function App() {
       }
     }
 
+    // SPL PSU Tier List & Wattage Rules
     if (psu) {
-      if (psuProfile.watts > 0 && psuProfile.watts < recommendedPsuWatts) {
+      const requiredTierRank =
+        gpuProfile.tier >= 5 || cpuProfile.tier >= 5
+          ? 4
+          : gpuProfile.tier >= 3
+          ? 3
+          : 2;
+
+      if (psuProfile.tierRank <= 1) {
+        issues.push({
+          category: 'SPL PSU Tier',
+          severity: 'critical',
+          title: `Tier ${psuProfile.splTier} Power Supply Hazard`,
+          message: `${psu.name} is rated Tier ${psuProfile.splTier} on the SPL PSU Tier List. Low-tier or unrated units lack essential protections and pose a hardware safety risk.`,
+          action: 'Replace immediately with a Tier C or higher SPL-rated unit (e.g., MSI MAG A-BN, Cooler Master MWE V2, or Corsair RMx).',
+        });
+      } else if (psuProfile.watts > 0 && psuProfile.watts < recommendedPsuWatts) {
         issues.push({
           category: 'Power Supply',
           severity: 'critical',
           title: 'Insufficient Power Supply Headroom',
-          message: `System peak load requires at least ${recommendedPsuWatts}W. Current unit (${psuProfile.watts}W) risks shutdown during transient GPU spikes.`,
-          action: `Replace with a quality ${recommendedPsuWatts}W or higher power supply.`,
+          message: `System peak load requires at least ${recommendedPsuWatts}W. Current unit (${psuProfile.watts}W · SPL Tier ${psuProfile.splTier}) risks shutdown during transient GPU spikes.`,
+          action: `Select a Tier ${gpuProfile.tier >= 5 ? 'B/A' : 'C+'} power supply rated at ${recommendedPsuWatts}W or higher.`,
         });
-      } else if (psuProfile.isGeneric && gpuProfile.tier >= 3) {
+      } else if (psuProfile.tierRank < requiredTierRank) {
+        const minLabel = requiredTierRank === 4 ? 'Tier B or A' : 'Tier C';
         issues.push({
-          category: 'Power Supply',
+          category: 'SPL PSU Tier',
           severity: 'warning',
-          title: 'Unrated Power Supply Risk',
-          message: `${psu.name} lacks official 80+ efficiency certification. Lacks critical electrical circuit protections.`,
-          action: 'Use a recognized 80+ Bronze or 80+ Gold tier power supply.',
+          title: `PSU Tier Below Recommended (${minLabel})`,
+          message: `${psu.name} is rated SPL Tier ${psuProfile.splTier}, which is below the recommended ${minLabel} threshold for ${gpu?.name || cpu?.name}.`,
+          action: `Upgrade to an SPL ${minLabel} power supply for stronger transient and ripple regulation.`,
         });
       }
     }
@@ -1366,15 +1482,15 @@ export default function App() {
       return {
         title: 'System Validator Ready',
         tone: 'neutral',
-        summary: 'Select existing or proposed components to analyze socket pinouts, RAM channels, power delivery, and thermal tolerances.',
+        summary: 'Select existing or proposed components to analyze socket pinouts, RAM channels, SPL PSU tiers, power delivery, and thermal tolerances.',
       };
     }
     return {
       title: 'Platform Architecture Verified',
       tone: 'success',
-      summary: `All platform criteria cleared.\n• Socket: ${cpuSocket || 'Validated'}\n• Memory Bus: ${ramProfile.isDualChannel ? '128-Bit Dual-Channel Active' : 'Configured'}\n• Power Headroom: ~${psuProfile.watts > 0 ? psuProfile.watts - recommendedPsuWatts : dssRules.psuBufferWatts}W buffer above transient peak.`,
+      summary: `All platform criteria cleared.\n• Socket: ${cpuSocket || 'Validated'}\n• SPL PSU Tier: ${effectiveParts['Power Supplies'] ? `Tier ${psuProfile.splTier}` : 'Pending'}\n• Power Headroom: ~${psuProfile.watts > 0 ? psuProfile.watts - recommendedPsuWatts : dssRules.psuBufferWatts}W buffer above transient peak.`,
     };
-  }, [dssIssues, selectedItems, existingPc, cpuSocket, ramProfile, psuProfile, recommendedPsuWatts, dssRules.psuBufferWatts]);
+  }, [dssIssues, selectedItems, existingPc, cpuSocket, effectiveParts, psuProfile, recommendedPsuWatts, dssRules.psuBufferWatts]);
 
   const compatibilityScore = useMemo(() => {
     let score = 100;
@@ -1460,6 +1576,7 @@ export default function App() {
         product?.capacity,
         product?.interface_type,
         product?.form_factor,
+        product?.psu_tier,
         product?.specs,
       ]
         .filter(Boolean)
@@ -1512,7 +1629,7 @@ export default function App() {
     }, {});
   }, [catalogProducts]);
 
-  // Rule-Based Smart Build Assistant Engine (Rotated/Varied Selection Across Valid Candidates)
+  // Rule-Based Smart Build Assistant Engine (SPL PSU Tier List Enforced)
   const handleRunSmartBuildAssistant = () => {
     const budget = Math.max(Number(assistantBudget) || 20000, 15000);
     const inStock = activeProducts.filter(
@@ -1549,7 +1666,6 @@ export default function App() {
           Number(b.price) - Number(a.price)
       );
 
-      // Prefer top-tier valid options while rotating away from the currently selected item when alternatives exist
       const topCandidates = sortedPool.slice(0, Math.min(3, sortedPool.length));
       const nonRepeating =
         topCandidates.length > 1 && currentSelectedId
@@ -1570,12 +1686,12 @@ export default function App() {
 
     const weights =
       assistantProfile === 'Gaming'
-        ? { cpu: gCpu, gpu: gGpu, board: 0.13, ram: 0.08, storage: 0.08, psu: 0.06, cooler: 0.03, case: 0.05 }
+        ? { cpu: gCpu, gpu: gGpu, board: 0.13, ram: 0.08, storage: 0.08, psu: 0.07, cooler: 0.03, case: 0.04 }
         : assistantProfile === 'Content Creation'
-        ? { cpu: cCpu, gpu: cGpu, board: 0.14, ram: 0.10, storage: 0.08, psu: 0.05, cooler: 0.03, case: 0.04 }
+        ? { cpu: cCpu, gpu: cGpu, board: 0.14, ram: 0.10, storage: 0.08, psu: 0.06, cooler: 0.03, case: 0.03 }
         : isOfficeApu
         ? { cpu: 0.32, gpu: 0.0, board: 0.22, ram: 0.14, storage: 0.12, psu: 0.09, cooler: 0.04, case: 0.07 }
-        : { cpu: 0.24, gpu: 0.31, board: 0.14, ram: 0.09, storage: 0.08, psu: 0.06, cooler: 0.03, case: 0.05 };
+        : { cpu: 0.24, gpu: 0.31, board: 0.14, ram: 0.09, storage: 0.08, psu: 0.07, cooler: 0.03, case: 0.04 };
 
     const apuPool = cpus.filter((c) => String(c.name).toUpperCase().includes('G'));
     const chosenCpu =
@@ -1634,10 +1750,29 @@ export default function App() {
       getGpuProfile(chosenGpu).watts +
       Number(dssRules.psuBufferWatts || 120);
     const minSafeWatts = Math.ceil(estWatts / 50) * 50;
-    const safePsus = psus.filter((p) => getPsuProfile(p).watts >= minSafeWatts);
+
+    const minSplRank =
+      getGpuProfile(chosenGpu).tier >= 5 || getCpuProfile(chosenCpu).tier >= 5
+        ? 4
+        : 3;
+
+    const splQualifiedPsus = psus.filter((p) => {
+      const profile = getPsuProfile(p);
+      return profile.watts >= minSafeWatts && profile.tierRank >= minSplRank;
+    });
+
+    const fallbackSafePsus = psus.filter((p) => {
+      const profile = getPsuProfile(p);
+      return profile.watts >= minSafeWatts && profile.tierRank >= 2;
+    });
+
     const chosenPsu = pickVariedWithinCap(
-      safePsus.length > 0 ? safePsus : psus,
-      Math.max(budget * weights.psu, 2400),
+      splQualifiedPsus.length > 0
+        ? splQualifiedPsus
+        : fallbackSafePsus.length > 0
+        ? fallbackSafePsus
+        : psus,
+      Math.max(budget * weights.psu, 3000),
       selectedBuild['Power Supplies']?.id
     );
 
@@ -1669,14 +1804,15 @@ export default function App() {
       .filter(Boolean)
       .reduce((acc, item) => acc + Number(item.price || 0), 0);
 
+    const pickedPsuTier = getPsuProfile(generatedBuild['Power Supplies']).splTier;
+
     setSelectedBuild(generatedBuild);
     setSelectedRamCount(2);
     setAssistantStatus(
-      `Recommended System Build generated for ${assistantProfile} (${targetSocket} · ${boardMemType}) — Total: ${peso(runningTotal)} / Target: ${peso(budget)}`
+      `Recommended System Build (${assistantProfile} · ${targetSocket} · SPL PSU Tier ${pickedPsuTier}) — Total: ${peso(runningTotal)} / Target: ${peso(budget)}`
     );
   };
 
-  // APK-Ready Quotation Export & D5 Database Storage
   const handleExportQuotation = async () => {
     if (selectedItems.length === 0) return;
     setExportingQuote(true);
@@ -1892,6 +2028,8 @@ export default function App() {
     const isReference = product.source_type === 'reference';
     const status = isReference ? 'reference' : inventoryMode === 'preorder' ? 'Pre-Order' : product.stock_status || 'In Stock';
     const formFactorTag = detectPartFormFactor(product);
+    const isPsu = normalizeText(product?.category) === 'power supplies';
+    const psuInfo = isPsu ? getPsuProfile(product) : null;
 
     let buttonLabel = '+ Add';
     if (activePage === 'upgrade' && upgradeMode === 'reference') buttonLabel = 'Select Owned';
@@ -1911,6 +2049,19 @@ export default function App() {
             {formFactorTag !== 'Standard' && (
               <span className="text-[10px] font-semibold bg-slate-800 text-blue-300 px-2 py-0.5 rounded">
                 {formFactorTag}
+              </span>
+            )}
+            {isPsu && psuInfo && (
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded border ${
+                  psuInfo.tierRank >= 4
+                    ? 'bg-emerald-950/70 text-emerald-300 border-emerald-700/40'
+                    : psuInfo.tierRank === 3
+                    ? 'bg-blue-950/70 text-blue-300 border-blue-700/40'
+                    : 'bg-red-950/70 text-red-300 border-red-700/40'
+                }`}
+              >
+                SPL Tier {psuInfo.splTier}
               </span>
             )}
             <span className="text-[10px] text-slate-500 font-mono">
@@ -1977,7 +2128,14 @@ export default function App() {
   };
 
   const renderCategoryNavStrip = () => (
-    <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2.5 pt-0.5 border-b border-[#1f293d]">
+    <div
+      onWheel={(e) => {
+        if (e.deltaY !== 0) {
+          e.currentTarget.scrollLeft += e.deltaY;
+        }
+      }}
+      className="flex gap-2 overflow-x-auto pb-2.5 pt-0.5 border-b border-[#1f293d] scroll-smooth"
+    >
       {CATEGORIES.map((category) => {
         const isActive = activeTab === category && activePage !== 'home';
         const hasSelection = Boolean(selectedBuild[category]);
@@ -2014,11 +2172,11 @@ export default function App() {
   );
 
   const renderSmartBuildAssistantBar = () => (
-    <div id="smart-build-assistant" className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left space-y-3">
+    <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1f293d] pb-2.5">
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
-            Recommended System Build · Rule-Based DSS
+            Recommended System Build · SPL PSU Tier Rule-Based DSS
           </span>
           <h3 className="text-sm font-bold text-white">
             Smart Build Assistant (Auto-Generate Recommended System Build)
@@ -2092,42 +2250,6 @@ export default function App() {
     </div>
   );
 
-  // Instant-access diagnostic snapshot strip right above the catalog on web/desktop
-  const renderTopDiagnosticsBar = () => (
-    <div
-      id="system-diagnostics-panel"
-      className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 text-left space-y-2.5"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
-            System Diagnostics & Performance
-          </span>
-          <span
-            className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${
-              compatibilityScore >= 90
-                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
-                : compatibilityScore >= 70
-                ? 'bg-amber-950 text-amber-400 border border-amber-800/40'
-                : 'bg-red-950 text-red-400 border border-red-800/40'
-            }`}
-          >
-            Compatibility: {compatibilityScore}%
-          </span>
-        </div>
-        <span className="text-xs font-bold text-white">
-          {performanceTier.label}
-        </span>
-      </div>
-
-      <p className="text-xs text-slate-400 leading-relaxed whitespace-pre-line">
-        {dssIssues.length === 0
-          ? recommendation.summary
-          : `${dssIssues[0].title}: ${dssIssues[0].message}`}
-      </p>
-    </div>
-  );
-
   const renderCatalogList = (existingCategory = null) => (
     <div className="space-y-4">
       <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-3 space-y-3">
@@ -2135,7 +2257,7 @@ export default function App() {
           <div className="relative w-full sm:w-80">
             <input
               type="text"
-              placeholder="Search model, SKU, socket, specs..."
+              placeholder="Search model, SKU, socket, PSU tier, specs..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
@@ -2268,7 +2390,7 @@ export default function App() {
   const renderBuildSummary = () => (
     <div
       id="printable-quotation"
-      className="bg-[#111827] border border-[#1f293d] rounded-lg p-4"
+      className="bg-[#111827] border border-[#1f293d] rounded-lg p-3"
     >
       <div className="hidden print:block mb-4 border-b-2 border-slate-900 pb-3">
         <div className="flex justify-between items-start">
@@ -2292,28 +2414,28 @@ export default function App() {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1f293d] pb-3 mb-3 print:hidden">
+      <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#1f293d] pb-2 mb-2 print:hidden">
         <div>
-          <h3 className="text-sm font-bold text-white uppercase tracking-wider">
+          <h3 className="text-xs font-bold text-white uppercase tracking-wider leading-tight">
             System Build
           </h3>
           <p className="text-[10px] text-slate-400">
-            {selectedItems.length} of 8 components configured
+            {selectedItems.length}/8 components configured
           </p>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <button
             onClick={handleSaveCurrentBuild}
             disabled={savingBuild || selectedItems.length === 0}
-            className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[11px] font-bold disabled:opacity-40"
+            className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
           >
             {savingBuild ? 'Saving...' : 'Save'}
           </button>
           <button
             onClick={handleExportQuotation}
             disabled={exportingQuote || selectedItems.length === 0}
-            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-bold disabled:opacity-40"
+            className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-bold disabled:opacity-40"
             title="Download quotation file & log to database"
           >
             {exportingQuote ? 'Exporting...' : 'Export'}
@@ -2321,20 +2443,20 @@ export default function App() {
           <button
             onClick={() => window.print()}
             disabled={selectedItems.length === 0}
-            className="px-2.5 py-1 bg-blue-700 hover:bg-blue-600 text-white rounded text-[11px] font-bold disabled:opacity-40"
+            className="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
           >
             Print
           </button>
           <button
             onClick={handleClearBuild}
-            className="px-2.5 py-1 text-slate-400 hover:text-white text-[11px]"
+            className="px-1.5 py-0.5 text-slate-400 hover:text-white text-[10px]"
           >
             Reset
           </button>
         </div>
       </div>
 
-      <div className="space-y-1.5 print-table-wrapper">
+      <div className="space-y-1 print-table-wrapper">
         <div className="hidden print:table-row bg-slate-100 border-b border-slate-300 text-[8pt] font-black uppercase text-slate-700">
           <div className="table-cell p-2 text-left w-2/3">Component Specification</div>
           <div className="table-cell p-2 text-right w-1/3">Amount (PHP)</div>
@@ -2343,44 +2465,67 @@ export default function App() {
         {CATEGORIES.map((category) => {
           const item = selectedBuild[category];
           const isMemory = category === 'Memory';
+          const isPsu = category === 'Power Supplies';
           const printRowClass = !item ? 'print:hidden' : '';
+
+          const shortLabel =
+            category === 'Processors'
+              ? 'CPU'
+              : category === 'Motherboards'
+              ? 'MOBO'
+              : category === 'Video Cards'
+              ? 'GPU'
+              : category === 'Memory'
+              ? 'RAM'
+              : category === 'Storage'
+              ? 'SSD'
+              : category === 'Power Supplies'
+              ? 'PSU'
+              : category === 'CPU Coolers'
+              ? 'COOLER'
+              : 'CASE';
 
           return (
             <div
               key={category}
-              className={`p-2 rounded border border-[#1f293d] bg-[#0b0f19] flex items-center justify-between text-left print-table-row ${printRowClass}`}
+              className={`px-2 py-1 rounded border border-[#1f293d] bg-[#0b0f19] flex items-center justify-between gap-2 text-left print-table-row ${printRowClass}`}
             >
-              <div className="min-w-0 flex-1 pr-2 print-cell-name">
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase">
-                    {getCategoryLabel(category)}:
-                  </span>
-                  {isMemory && item && (
-                    <div className="flex items-center gap-1 bg-[#111827] px-1 py-0.5 rounded print:hidden">
-                      {[1, 2, 4].map((count) => (
-                        <button
-                          key={count}
-                          onClick={() => setSelectedRamCount(count)}
-                          className={`px-1 text-[9px] font-bold rounded ${
-                            selectedRamCount === count
-                              ? 'bg-blue-600 text-white'
-                              : 'text-slate-400'
-                          }`}
-                        >
-                          {count}x
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+              <div className="min-w-0 flex-1 flex items-center gap-1.5 print-cell-name">
+                <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0 w-12">
+                  {shortLabel}
+                </span>
 
-                <p className="text-xs font-semibold text-white truncate mt-0.5">
-                  {item ? item.name : <span className="text-slate-500 italic">Unassigned</span>}
+                <p className="text-[11px] font-semibold text-white truncate">
+                  {item ? item.name : <span className="text-slate-600 italic">Unassigned</span>}
                 </p>
+
+                {isPsu && item && (
+                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800/40 shrink-0 print:hidden">
+                    T-{getPsuProfile(item).splTier}
+                  </span>
+                )}
+
+                {isMemory && item && (
+                  <div className="flex items-center gap-0.5 bg-[#111827] px-1 rounded shrink-0 print:hidden">
+                    {[1, 2, 4].map((count) => (
+                      <button
+                        key={count}
+                        onClick={() => setSelectedRamCount(count)}
+                        className={`px-1 text-[8px] font-bold rounded ${
+                          selectedRamCount === count
+                            ? 'bg-blue-600 text-white'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {count}x
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 print-cell-price">
-                <span className="text-xs font-mono font-bold text-slate-200 print-price">
+              <div className="flex items-center gap-1.5 shrink-0 print-cell-price">
+                <span className="text-[11px] font-mono font-bold text-slate-200 print-price">
                   {item ? (item.price ? peso(item.price) : 'Included') : '--'}
                 </span>
                 {item && (
@@ -2388,7 +2533,7 @@ export default function App() {
                     onClick={() =>
                       setSelectedBuild((prev) => ({ ...prev, [category]: null }))
                     }
-                    className="text-slate-500 hover:text-red-400 font-bold px-1 print:hidden"
+                    className="text-slate-500 hover:text-red-400 font-bold text-xs leading-none print:hidden"
                   >
                     ×
                   </button>
@@ -2399,13 +2544,17 @@ export default function App() {
         })}
       </div>
 
-      <div className="mt-4 pt-3 border-t border-[#1f293d] print-summary-box">
-        <div className="mb-3 p-2.5 rounded bg-[#0b0f19] border border-[#1f293d] print:hidden">
-          <div className="flex justify-between text-xs mb-1">
-            <span className="text-slate-400 font-bold">Estimated Load:</span>
-            <span className="font-mono text-white font-bold">{totalSystemWattage}W</span>
+      <div className="mt-2.5 pt-2 border-t border-[#1f293d] print-summary-box">
+        <div className="mb-2 px-2 py-1.5 rounded bg-[#0b0f19] border border-[#1f293d] print:hidden">
+          <div className="flex justify-between items-center text-[11px] mb-1">
+            <span className="text-slate-400 font-semibold">
+              Est. Load: <strong className="text-white font-mono">{totalSystemWattage}W</strong>
+            </span>
+            <span className="text-[10px] text-slate-500">
+              Min PSU: {recommendedPsuWatts}W {effectiveParts['Power Supplies'] ? `(Tier ${psuProfile.splTier})` : ''}
+            </span>
           </div>
-          <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+          <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
             <div
               className={`h-full ${
                 totalSystemWattage > (psuProfile.watts || recommendedPsuWatts)
@@ -2420,26 +2569,18 @@ export default function App() {
               }}
             ></div>
           </div>
-          <p className="text-[10px] text-slate-500 mt-1">
-            Target PSU: {recommendedPsuWatts}W minimum
-          </p>
         </div>
 
-        <div className="flex justify-between items-baseline">
+        <div className="flex justify-between items-center">
           <div>
-            <p className="text-xs text-slate-400 font-bold">Total Estimate:</p>
-            <p className="text-[10px] text-slate-500">VAT Included · PH Retail</p>
+            <p className="text-xs text-slate-400 font-bold leading-none">Total Estimate</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              12-Mo: <span className="font-mono text-slate-300 font-semibold">{peso(monthlyEstimate)}/mo</span>
+            </p>
           </div>
-          <p className="text-xl font-black text-emerald-400 font-mono print-total">
+          <p className="text-lg font-black text-emerald-400 font-mono print-total">
             {peso(totalPrice)}
           </p>
-        </div>
-
-        <div className="mt-2 pt-2 border-t border-[#1f293d] flex justify-between text-xs text-slate-400 print:hidden">
-          <span>12-Month Est:</span>
-          <span className="font-mono text-slate-300 font-bold">
-            {peso(monthlyEstimate)}/mo
-          </span>
         </div>
       </div>
     </div>
@@ -2544,7 +2685,6 @@ export default function App() {
     </div>
   );
 
-  // True Root-Level Floating Mobile Pill Bar
   const renderFloatingMobileBar = () => {
     if (activePage !== 'builder' && activePage !== 'upgrade') return null;
 
@@ -2588,7 +2728,6 @@ export default function App() {
     );
   };
 
-  // Instant Slide-Up Mobile Drawer for System Build & DSS Diagnostics
   const renderMobileManifestDrawer = () => {
     if (!showMobileDrawer) return null;
 
@@ -2648,8 +2787,8 @@ export default function App() {
               </div>
             )}
 
-            {renderRecommendationPanel()}
             {renderBuildSummary()}
+            {renderRecommendationPanel()}
           </div>
         </div>
       </div>
@@ -2683,7 +2822,7 @@ export default function App() {
                 Configure, Upgrade, and Quote Your Next Desktop.
               </h2>
               <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-                Use the Smart Build Assistant to generate a Recommended System Build, validate physical socket pinouts and memory channels, and export formal quotations.
+                Use the Smart Build Assistant to generate Recommended System Builds with SPL PSU tier validation, check compatibility, and export formal quotations.
               </p>
               <div className="mt-5 flex flex-wrap gap-2.5">
                 <button
@@ -2708,7 +2847,7 @@ export default function App() {
               </div>
               <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
                 <span className="text-[10px] text-slate-500 font-bold uppercase block">Validation</span>
-                <span className="text-lg font-black text-blue-400 font-mono">Rule-Based DSS</span>
+                <span className="text-lg font-black text-blue-400 font-mono">SPL Tier DSS</span>
               </div>
               <div className="p-3 bg-[#0b0f19] border border-[#1f293d] rounded">
                 <span className="text-[10px] text-slate-500 font-bold uppercase block">Pre-Order SKUs</span>
@@ -2765,15 +2904,13 @@ export default function App() {
     <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       <div className="lg:col-span-8 space-y-4">
         {renderSmartBuildAssistantBar()}
-        {renderTopDiagnosticsBar()}
         {renderCategoryNavStrip()}
         {renderCatalogList()}
       </div>
 
-      {/* Desktop Sticky Sidebar: Diagnostics First, Then System Build */}
-      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-20 print:block">
-        {renderRecommendationPanel()}
+      <aside className="hidden lg:block lg:col-span-4 space-y-2.5 lg:sticky lg:top-20 lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto pr-1 print:block">
         {renderBuildSummary()}
+        {renderRecommendationPanel()}
       </aside>
     </section>
   );
@@ -2804,15 +2941,11 @@ export default function App() {
           </button>
         </div>
 
-        {renderTopDiagnosticsBar()}
         {renderCategoryNavStrip()}
         {renderCatalogList(activeTab)}
       </div>
 
-      {/* Desktop Sticky Sidebar: Diagnostics First */}
-      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-20">
-        {renderRecommendationPanel()}
-
+      <aside className="hidden lg:block lg:col-span-4 space-y-2.5 lg:sticky lg:top-20 lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto pr-1">
         <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left print:hidden">
           <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#1f293d]">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -2868,11 +3001,11 @@ export default function App() {
         </div>
 
         {renderBuildSummary()}
+        {renderRecommendationPanel()}
       </aside>
     </section>
   );
 
-  // Hidden Administrator Console with PIN Lock & Dedicated Logout Button
   const renderAdminPage = () => {
     const isAuthorized = isAdminAccount || adminUnlocked;
 
@@ -2956,7 +3089,8 @@ export default function App() {
         q === '' ||
         normalizeText(item.name).includes(q) ||
         normalizeText(item.brand).includes(q) ||
-        normalizeText(item.socket).includes(q);
+        normalizeText(item.socket).includes(q) ||
+        normalizeText(item.psu_tier).includes(q);
       return matchesCat && matchesSearch;
     });
 
@@ -3032,7 +3166,7 @@ export default function App() {
                     required
                     value={newItemForm.name}
                     onChange={(e) => setNewItemForm((p) => ({ ...p, name: e.target.value }))}
-                    placeholder="e.g. AMD Ryzen 5 5600"
+                    placeholder="e.g. MSI MAG A650BN 650W 80+ Bronze"
                     className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
                   />
                 </div>
@@ -3073,7 +3207,7 @@ export default function App() {
                         required
                         value={newItemForm.price}
                         onChange={(e) => setNewItemForm((p) => ({ ...p, price: e.target.value }))}
-                        placeholder="7190"
+                        placeholder="3450"
                         className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white font-mono"
                       />
                     </div>
@@ -3104,14 +3238,21 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 block mb-1">RAM Std</label>
-                    <input
-                      type="text"
-                      value={newItemForm.memory_type}
-                      onChange={(e) => setNewItemForm((p) => ({ ...p, memory_type: e.target.value }))}
-                      placeholder="DDR4 / DDR5"
+                    <label className="text-slate-400 block mb-1">SPL PSU Tier</label>
+                    <select
+                      value={newItemForm.psu_tier}
+                      onChange={(e) => setNewItemForm((p) => ({ ...p, psu_tier: e.target.value }))}
                       className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1.5 text-white"
-                    />
+                    >
+                      <option value="">Auto</option>
+                      <option value="A+">A+</option>
+                      <option value="A">A</option>
+                      <option value="B">B</option>
+                      <option value="C">C</option>
+                      <option value="D">D</option>
+                      <option value="E">E</option>
+                      <option value="F">F</option>
+                    </select>
                   </div>
                   <div>
                     <label className="text-slate-400 block mb-1">Score (1-100)</label>
@@ -3132,7 +3273,7 @@ export default function App() {
                     rows={2}
                     value={newItemForm.specs}
                     onChange={(e) => setNewItemForm((p) => ({ ...p, specs: e.target.value }))}
-                    placeholder="6 Cores / 12 Threads, 65W TDP, PCIe 4.0..."
+                    placeholder="650W, 80+ Bronze, DC-DC, PCIe 5.0 / ATX 3.0..."
                     className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
                   />
                 </div>
@@ -3188,7 +3329,7 @@ export default function App() {
 
                 <input
                   type="text"
-                  placeholder="Filter records by name or brand..."
+                  placeholder="Filter records by name, brand, or SPL tier..."
                   value={adminSearch}
                   onChange={(e) => setAdminSearch(e.target.value)}
                   className="bg-[#0b0f19] border border-[#1f293d] rounded px-3 py-1.5 text-xs text-white w-full sm:w-64"
@@ -3209,9 +3350,9 @@ export default function App() {
                         <span className="text-[10px] text-slate-500 font-mono">
                           ID: {item.id}
                         </span>
-                        {item.socket && (
-                          <span className="text-[10px] text-slate-400">
-                            Socket: {item.socket}
+                        {normalizeText(item.category) === 'power supplies' && (
+                          <span className="text-[10px] font-bold text-emerald-400">
+                            SPL Tier: {getPsuProfile(item).splTier}
                           </span>
                         )}
                       </div>
@@ -3267,7 +3408,7 @@ export default function App() {
           <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 max-w-3xl space-y-4">
             <div>
               <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
-                D3: Compatibility & Rule-Based Recommendation Engine
+                D3: Compatibility & SPL PSU Tier Recommendation Engine
               </span>
               <h3 className="text-base font-bold text-white mt-0.5">
                 Configure Deterministic Hardware Validation & Budget Allocation Rules
@@ -3590,15 +3731,23 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 block mb-1">RAM Type</label>
-                    <input
-                      type="text"
-                      value={editingItem.memory_type || ''}
+                    <label className="text-slate-400 block mb-1">SPL PSU Tier</label>
+                    <select
+                      value={editingItem.psu_tier || ''}
                       onChange={(e) =>
-                        setEditingItem((prev) => ({ ...prev, memory_type: e.target.value }))
+                        setEditingItem((prev) => ({ ...prev, psu_tier: e.target.value }))
                       }
                       className="w-full bg-[#0b0f19] border border-[#1f293d] rounded px-2.5 py-1.5 text-white"
-                    />
+                    >
+                      <option value="">Auto</option>
+                      <option value="A+">A+</option>
+                      <option value="A">A</option>
+                      <option value="B">B</option>
+                      <option value="C">C</option>
+                      <option value="D">D</option>
+                      <option value="E">E</option>
+                      <option value="F">F</option>
+                    </select>
                   </div>
                   <div>
                     <label className="text-slate-400 block mb-1">Score</label>
@@ -3918,7 +4067,7 @@ export default function App() {
     } else if (category === 'Storage') {
       generatedNote = `Device: ${product.capacity || 'Unknown'} · Interface: ${product.interface_type || storage.driveClass}.`;
     } else if (category === 'Power Supplies') {
-      generatedNote = `Wattage: ${psu.watts || 'Unknown'}W · Certification: ${psu.rating}.`;
+      generatedNote = `SPL Tier: ${psu.splTier} · Wattage: ${psu.watts || 'Unknown'}W · Certification: ${psu.rating}.`;
     } else if (category === 'CPU Coolers') {
       generatedNote = `${cooler.label} · Verify socket support before assembly.`;
     } else if (category === 'Cases') {
@@ -3955,8 +4104,14 @@ export default function App() {
               </span>
             </div>
             <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d]">
-              <span className="text-[10px] text-slate-500 uppercase block">Hardware Rating</span>
-              <span className="font-bold text-white">{product.hardware_score || 75}/100</span>
+              <span className="text-[10px] text-slate-500 uppercase block">
+                {normalizeText(product.category) === 'power supplies' ? 'SPL PSU Tier' : 'Hardware Rating'}
+              </span>
+              <span className="font-bold text-white">
+                {normalizeText(product.category) === 'power supplies'
+                  ? `Tier ${psu.splTier} (Score: ${product.hardware_score || 75}/100)`
+                  : `${product.hardware_score || 75}/100`}
+              </span>
             </div>
             <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d]">
               <span className="text-[10px] text-slate-500 uppercase block">Form Factor / Socket</span>
