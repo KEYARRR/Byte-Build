@@ -419,13 +419,11 @@ function ByteBuildGlobalStyles() {
       textarea {
         color-scheme: dark;
       }
-      /* Fix missing Peso symbol (₱) on Android WebViews by using Roboto/Noto Sans with tabular numbers instead of Droid Sans Mono */
       .font-mono {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif !important;
         font-variant-numeric: tabular-nums;
         letter-spacing: -0.01em;
       }
-      /* Hide horizontal scrollbars on mobile touch strips while keeping swipe active */
       .no-scrollbar::-webkit-scrollbar {
         display: none !important;
         width: 0 !important;
@@ -913,7 +911,6 @@ export default function App() {
       if (error) throw error;
 
       alert('Password updated successfully! You can now sign in with your new password.');
-      
       window.location.hash = '';
       await supabase.auth.signOut();
       setCurrentUser(null);
@@ -1515,7 +1512,7 @@ export default function App() {
     }, {});
   }, [catalogProducts]);
 
-  // Rule-Based Smart Build Assistant Engine
+  // Rule-Based Smart Build Assistant Engine (Rotated/Varied Selection Across Valid Candidates)
   const handleRunSmartBuildAssistant = () => {
     const budget = Math.max(Number(assistantBudget) || 20000, 15000);
     const inStock = activeProducts.filter(
@@ -1541,18 +1538,26 @@ export default function App() {
     const coolers = byCat('CPU Coolers');
     const cases = byCat('Cases');
 
-    const pickBestWithinCap = (list, cap, preferHighScore = true) => {
+    const pickVariedWithinCap = (list, cap, currentSelectedId = null) => {
       if (!list || list.length === 0) return null;
       const affordable = list.filter((item) => Number(item.price) <= cap);
-      if (affordable.length === 0) return list[0];
-      if (preferHighScore) {
-        return [...affordable].sort(
-          (a, b) =>
-            Number(b.hardware_score || 0) - Number(a.hardware_score || 0) ||
-            Number(b.price) - Number(a.price)
-        )[0];
-      }
-      return affordable[affordable.length - 1];
+      const pool = affordable.length > 0 ? affordable : [list[0]];
+
+      const sortedPool = [...pool].sort(
+        (a, b) =>
+          Number(b.hardware_score || 0) - Number(a.hardware_score || 0) ||
+          Number(b.price) - Number(a.price)
+      );
+
+      // Prefer top-tier valid options while rotating away from the currently selected item when alternatives exist
+      const topCandidates = sortedPool.slice(0, Math.min(3, sortedPool.length));
+      const nonRepeating =
+        topCandidates.length > 1 && currentSelectedId
+          ? topCandidates.filter((item) => item.id !== currentSelectedId)
+          : topCandidates;
+
+      const finalPool = nonRepeating.length > 0 ? nonRepeating : topCandidates;
+      return finalPool[Math.floor(Math.random() * finalPool.length)];
     };
 
     const isOfficeApu =
@@ -1575,17 +1580,18 @@ export default function App() {
     const apuPool = cpus.filter((c) => String(c.name).toUpperCase().includes('G'));
     const chosenCpu =
       isOfficeApu && apuPool.length > 0
-        ? pickBestWithinCap(apuPool, budget * weights.cpu)
-        : pickBestWithinCap(cpus, budget * weights.cpu);
+        ? pickVariedWithinCap(apuPool, budget * weights.cpu, selectedBuild.Processors?.id)
+        : pickVariedWithinCap(cpus, budget * weights.cpu, selectedBuild.Processors?.id);
 
     const targetSocket = detectCpuSocket(chosenCpu) || 'AM4';
 
     const compatibleBoards = boards.filter(
       (b) => detectMotherboardSocket(b) === targetSocket
     );
-    const chosenBoard = pickBestWithinCap(
+    const chosenBoard = pickVariedWithinCap(
       compatibleBoards.length > 0 ? compatibleBoards : boards,
-      budget * weights.board
+      budget * weights.board,
+      selectedBuild.Motherboards?.id
     );
 
     const boardMemType =
@@ -1595,23 +1601,33 @@ export default function App() {
     const compatibleRams = rams.filter(
       (r) => getRamProfile(r, 2).type === boardMemType
     );
-    const chosenRam = pickBestWithinCap(
+    const chosenRam = pickVariedWithinCap(
       compatibleRams.length > 0 ? compatibleRams : rams,
-      budget * weights.ram
+      budget * weights.ram,
+      selectedBuild.Memory?.id
     );
 
     const chosenGpu = isOfficeApu
       ? null
-      : pickBestWithinCap(gpus, budget * weights.gpu);
+      : pickVariedWithinCap(gpus, budget * weights.gpu, selectedBuild['Video Cards']?.id);
 
     const ssdPool = storages.filter((s) => !getStorageProfile(s).isHdd);
-    const chosenStorage = pickBestWithinCap(
+    const chosenStorage = pickVariedWithinCap(
       ssdPool.length > 0 ? ssdPool : storages,
-      budget * weights.storage
+      budget * weights.storage,
+      selectedBuild.Storage?.id
     );
 
-    const chosenCooler = pickBestWithinCap(coolers, budget * weights.cooler);
-    const chosenCase = pickBestWithinCap(cases, budget * weights.case);
+    const chosenCooler = pickVariedWithinCap(
+      coolers,
+      budget * weights.cooler,
+      selectedBuild['CPU Coolers']?.id
+    );
+    const chosenCase = pickVariedWithinCap(
+      cases,
+      budget * weights.case,
+      selectedBuild.Cases?.id
+    );
 
     const estWatts =
       getCpuProfile(chosenCpu).watts +
@@ -1619,9 +1635,10 @@ export default function App() {
       Number(dssRules.psuBufferWatts || 120);
     const minSafeWatts = Math.ceil(estWatts / 50) * 50;
     const safePsus = psus.filter((p) => getPsuProfile(p).watts >= minSafeWatts);
-    const chosenPsu = pickBestWithinCap(
+    const chosenPsu = pickVariedWithinCap(
       safePsus.length > 0 ? safePsus : psus,
-      Math.max(budget * weights.psu, 2400)
+      Math.max(budget * weights.psu, 2400),
+      selectedBuild['Power Supplies']?.id
     );
 
     const generatedBuild = {
@@ -1655,7 +1672,7 @@ export default function App() {
     setSelectedBuild(generatedBuild);
     setSelectedRamCount(2);
     setAssistantStatus(
-      `Smart Build generated for ${assistantProfile} (${targetSocket} · ${boardMemType}) — Total: ${peso(runningTotal)} / Target: ${peso(budget)}`
+      `Recommended System Build generated for ${assistantProfile} (${targetSocket} · ${boardMemType}) — Total: ${peso(runningTotal)} / Target: ${peso(budget)}`
     );
   };
 
@@ -1997,14 +2014,14 @@ export default function App() {
   );
 
   const renderSmartBuildAssistantBar = () => (
-    <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left space-y-3">
+    <div id="smart-build-assistant" className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left space-y-3">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-[#1f293d] pb-2.5">
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
-            Rule-Based Decision Support Module
+            Recommended System Build · Rule-Based DSS
           </span>
           <h3 className="text-sm font-bold text-white">
-            Smart Build Assistant (Auto-Configure by Budget & Workload)
+            Smart Build Assistant (Auto-Generate Recommended System Build)
           </h3>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -2072,6 +2089,42 @@ export default function App() {
           {assistantStatus}
         </div>
       )}
+    </div>
+  );
+
+  // Instant-access diagnostic snapshot strip right above the catalog on web/desktop
+  const renderTopDiagnosticsBar = () => (
+    <div
+      id="system-diagnostics-panel"
+      className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 text-left space-y-2.5"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400">
+            System Diagnostics & Performance
+          </span>
+          <span
+            className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${
+              compatibilityScore >= 90
+                ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
+                : compatibilityScore >= 70
+                ? 'bg-amber-950 text-amber-400 border border-amber-800/40'
+                : 'bg-red-950 text-red-400 border border-red-800/40'
+            }`}
+          >
+            Compatibility: {compatibilityScore}%
+          </span>
+        </div>
+        <span className="text-xs font-bold text-white">
+          {performanceTier.label}
+        </span>
+      </div>
+
+      <p className="text-xs text-slate-400 leading-relaxed whitespace-pre-line">
+        {dssIssues.length === 0
+          ? recommendation.summary
+          : `${dssIssues[0].title}: ${dssIssues[0].message}`}
+      </p>
     </div>
   );
 
@@ -2242,7 +2295,7 @@ export default function App() {
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1f293d] pb-3 mb-3 print:hidden">
         <div>
           <h3 className="text-sm font-bold text-white uppercase tracking-wider">
-            System Manifest
+            System Build
           </h3>
           <p className="text-[10px] text-slate-400">
             {selectedItems.length} of 8 components configured
@@ -2274,7 +2327,7 @@ export default function App() {
           </button>
           <button
             onClick={handleClearBuild}
-            className="px-2 py-1 text-slate-400 hover:text-white text-[11px]"
+            className="px-2.5 py-1 text-slate-400 hover:text-white text-[11px]"
           >
             Reset
           </button>
@@ -2491,7 +2544,7 @@ export default function App() {
     </div>
   );
 
-  // True Root-Level Floating Mobile Pill Bar (Never Trapped at Bottom of Page)
+  // True Root-Level Floating Mobile Pill Bar
   const renderFloatingMobileBar = () => {
     if (activePage !== 'builder' && activePage !== 'upgrade') return null;
 
@@ -2535,7 +2588,7 @@ export default function App() {
     );
   };
 
-  // Instant Slide-Up Mobile Drawer for Manifest & DSS Diagnostics
+  // Instant Slide-Up Mobile Drawer for System Build & DSS Diagnostics
   const renderMobileManifestDrawer = () => {
     if (!showMobileDrawer) return null;
 
@@ -2548,7 +2601,7 @@ export default function App() {
                 Live Build & DSS Diagnostics
               </span>
               <h3 className="text-sm font-black text-white">
-                System Manifest ({selectedItems.length}/8) · Score: {compatibilityScore}%
+                System Build ({selectedItems.length}/8) · Score: {compatibilityScore}%
               </h3>
             </div>
             <button
@@ -2595,8 +2648,8 @@ export default function App() {
               </div>
             )}
 
-            {renderBuildSummary()}
             {renderRecommendationPanel()}
+            {renderBuildSummary()}
           </div>
         </div>
       </div>
@@ -2630,7 +2683,7 @@ export default function App() {
                 Configure, Upgrade, and Quote Your Next Desktop.
               </h2>
               <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-                Use the Smart Build Assistant to generate budget-matched configurations, validate physical socket pinouts and memory channels, and export formal quotations.
+                Use the Smart Build Assistant to generate a Recommended System Build, validate physical socket pinouts and memory channels, and export formal quotations.
               </p>
               <div className="mt-5 flex flex-wrap gap-2.5">
                 <button
@@ -2712,14 +2765,15 @@ export default function App() {
     <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       <div className="lg:col-span-8 space-y-4">
         {renderSmartBuildAssistantBar()}
+        {renderTopDiagnosticsBar()}
         {renderCategoryNavStrip()}
         {renderCatalogList()}
       </div>
 
-      {/* Desktop Sticky Sidebar (Hidden on Mobile) */}
-      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-24 print:block">
-        {renderBuildSummary()}
+      {/* Desktop Sticky Sidebar: Diagnostics First, Then System Build */}
+      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-20 print:block">
         {renderRecommendationPanel()}
+        {renderBuildSummary()}
       </aside>
     </section>
   );
@@ -2750,12 +2804,15 @@ export default function App() {
           </button>
         </div>
 
+        {renderTopDiagnosticsBar()}
         {renderCategoryNavStrip()}
         {renderCatalogList(activeTab)}
       </div>
 
-      {/* Desktop Sticky Sidebar */}
-      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-24">
+      {/* Desktop Sticky Sidebar: Diagnostics First */}
+      <aside className="hidden lg:block lg:col-span-4 space-y-4 lg:sticky lg:top-20">
+        {renderRecommendationPanel()}
+
         <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left print:hidden">
           <div className="flex justify-between items-center mb-3 pb-2 border-b border-[#1f293d]">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -2811,7 +2868,6 @@ export default function App() {
         </div>
 
         {renderBuildSummary()}
-        {renderRecommendationPanel()}
       </aside>
     </section>
   );
@@ -2906,7 +2962,6 @@ export default function App() {
 
     return (
       <div className="space-y-6 text-left">
-        {/* Top Admin Header with Lock & Exit Admin Button */}
         <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -2952,7 +3007,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* SECTION 1 & 2: PRODUCT CATALOG & REFERENCE DATABASE CRUD */}
         {(adminSection === 'catalog' || adminSection === 'reference') && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             <div className="lg:col-span-4 bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
@@ -3197,7 +3251,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleAdminDeleteItem(item, currentAdminTableName)}
-                        className="px-2 py-1 rounded text-slate-500 hover:text-red-400 font-bold"
+                        className="px-2.5 py-1 rounded text-slate-500 hover:text-red-400 font-bold"
                       >
                         ×
                       </button>
@@ -3209,7 +3263,6 @@ export default function App() {
           </div>
         )}
 
-        {/* SECTION 3: MAINTAIN COMPATIBILITY & RECOMMENDATION RULES (D3) */}
         {adminSection === 'rules' && (
           <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 max-w-3xl space-y-4">
             <div>
@@ -3351,7 +3404,6 @@ export default function App() {
           </div>
         )}
 
-        {/* SECTION 4: REVIEW GENERATED QUOTATIONS (D5) & PRE-ORDER REQUESTS */}
         {adminSection === 'quotations' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
@@ -3374,7 +3426,7 @@ export default function App() {
 
               {adminQuotations.length === 0 ? (
                 <p className="text-xs text-slate-500 py-6 text-center">
-                  No exported quotations logged yet. Click "Export" in the Builder manifest to log a quotation.
+                  No exported quotations logged yet. Click "Export" in the System Build card to log a quotation.
                 </p>
               ) : (
                 <div className="space-y-2 max-h-96 overflow-y-auto">
@@ -3468,7 +3520,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Edit Component Modal */}
         {editingItem && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[120] flex items-center justify-center p-4">
             <div className="bg-[#111827] border border-[#1f293d] max-w-md w-full rounded-lg p-5 shadow-2xl text-left text-white">
@@ -4015,7 +4066,6 @@ export default function App() {
     <>
       <ByteBuildGlobalStyles />
       <div className="min-h-screen bg-[#0b0f19] text-slate-200">
-        {/* Responsive Two-Row Mobile / Single-Row Desktop Header */}
         <header className="border-b border-[#1f293d] bg-[#111827]/95 backdrop-blur sticky top-0 z-50">
           <div className="max-w-7xl mx-auto px-3 sm:px-4">
             <div className="h-14 flex items-center justify-between gap-3">
@@ -4039,7 +4089,6 @@ export default function App() {
                 </div>
               </button>
 
-              {/* Desktop Center Navigation */}
               <nav className="hidden md:flex items-center gap-1.5">
                 {[
                   'home',
@@ -4072,7 +4121,6 @@ export default function App() {
                 ))}
               </nav>
 
-              {/* Sign In / Account Pill */}
               <div className="shrink-0">
                 <button
                   onClick={() => setActivePage('login')}
@@ -4083,7 +4131,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Mobile Full-Width Navigation Row (No Cutoff or Blue Scrollbar) */}
             <nav className="flex md:hidden items-center gap-1.5 pb-2.5 pt-1 overflow-x-auto no-scrollbar border-t border-[#1f293d]/70">
               {[
                 'home',
