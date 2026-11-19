@@ -454,26 +454,46 @@ const getMotherboardProfile = (part) => {
 const getRamProfile = (part, userCount = null) => {
   const name = String(part?.name || '').toUpperCase();
   const capacityText = String(part?.capacity || '').toUpperCase();
-  const dualPackMatch = `${name} ${capacityText}`.match(/(\d+)\s*X\s*(\d+)\s*GB/);
-  const singleMatch = `${name} ${capacityText}`.match(/(\d+)\s*GB/);
-  let perStickCapacity = 0;
-  let packMultiplier = 1;
-  if (dualPackMatch) {
-    packMultiplier = Number(dualPackMatch[1]);
-    perStickCapacity = Number(dualPackMatch[2]);
-  } else if (singleMatch) {
-    perStickCapacity = Number(singleMatch[1]);
-  }
-  const finalStickCount = userCount !== null ? userCount : packMultiplier;
-  const totalCapacity = perStickCapacity * finalStickCount;
+  const specsText = String(part?.specs || '').toUpperCase();
+  const combined = `${name} ${capacityText} ${specsText}`;
+
+  // A listing such as "2x8GB" is one retail kit containing two physical sticks.
+  // Its database price is the price of the whole kit, not the price of one stick.
+  const packMatch = combined.match(/(\d+)\s*[X×]\s*(\d+)\s*GB/);
+  const capacityMatch = combined.match(/(\d+(?:\.\d+)?)\s*GB/);
+  const packStickCount = packMatch ? Math.max(1, Number(packMatch[1])) : 1;
+  const perStickCapacity = packMatch
+    ? Number(packMatch[2])
+    : capacityMatch
+    ? Number(capacityMatch[1])
+    : 0;
+
+  const requestedStickCount =
+    userCount !== null && userCount !== undefined
+      ? Math.max(1, Number(userCount) || 1)
+      : packStickCount;
+
+  // RAM is sold in the package size represented by the inventory listing.
+  // Round up to whole packages so the displayed count and price reflect
+  // the number of physical sticks the customer actually receives.
+  const packagesNeeded = Math.max(1, Math.ceil(requestedStickCount / packStickCount));
+  const stickCount = packagesNeeded * packStickCount;
+  const unitPrice = Number(part?.price || 0);
+  const totalPrice = unitPrice * packagesNeeded;
+
   return {
     perStickCapacity,
-    stickCount: finalStickCount,
-    hasChosenSticks: userCount !== null,
-    totalCapacity,
-    isSingleChannel: finalStickCount === 1,
-    isDualChannel: finalStickCount === 2,
-    isQuadChannelOrPopulated: finalStickCount >= 4,
+    packStickCount,
+    requestedStickCount,
+    packagesNeeded,
+    unitPrice,
+    totalPrice,
+    stickCount,
+    hasChosenSticks: userCount !== null && userCount !== undefined,
+    totalCapacity: perStickCapacity * stickCount,
+    isSingleChannel: stickCount === 1,
+    isDualChannel: stickCount === 2,
+    isQuadChannelOrPopulated: stickCount >= 4,
     type:
       part?.memory_type ||
       (name.includes('DDR5') ? 'DDR5' : name.includes('DDR4') ? 'DDR4' : 'Unknown'),
@@ -1393,7 +1413,16 @@ export default function App() {
 
   const selectedItems = useMemo(() => Object.values(selectedBuild).filter(Boolean), [selectedBuild]);
 
-  const totalPrice = selectedItems.reduce((sum, item) => sum + Number(item?.price || 0), 0);
+  // RAM inventory prices are package prices. Multiply by the number of complete
+  // packages required for the selected physical stick count.
+  const totalPrice = Object.entries(selectedBuild).reduce((sum, [category, item]) => {
+    if (!item) return sum;
+    const itemPrice =
+      category === 'Memory'
+        ? getRamProfile(item, selectedRamCount).totalPrice
+        : Number(item.price || 0);
+    return sum + itemPrice;
+  }, 0);
 
   const effectiveParts = useMemo(() => {
     return {
@@ -2078,15 +2107,20 @@ export default function App() {
     const coolers = byCat('CPU Coolers');
     const cases = byCat('Cases');
 
-    const pickVariedWithinCap = (list, cap, currentSelectedId = null) => {
+    const pickVariedWithinCap = (
+      list,
+      cap,
+      currentSelectedId = null,
+      getItemPrice = (item) => Number(item.price || 0)
+    ) => {
       if (!list || list.length === 0) return null;
-      const affordable = list.filter((item) => Number(item.price) <= cap);
+      const affordable = list.filter((item) => getItemPrice(item) <= cap);
       const pool = affordable.length > 0 ? affordable : [list[0]];
 
       const sortedPool = [...pool].sort(
         (a, b) =>
           Number(b.hardware_score || 0) - Number(a.hardware_score || 0) ||
-          Number(b.price) - Number(a.price)
+          getItemPrice(b) - getItemPrice(a)
       );
 
       const topCandidates = sortedPool.slice(0, Math.min(4, sortedPool.length));
@@ -2140,11 +2174,19 @@ export default function App() {
     const compatibleRams = rams.filter(
       (r) => getRamProfile(r, 2).type === boardMemType
     );
+    const ramPool = compatibleRams.length > 0 ? compatibleRams : rams;
     const chosenRam = pickVariedWithinCap(
-      compatibleRams.length > 0 ? compatibleRams : rams,
+      ramPool,
       budget * weights.ram,
-      selectedBuild.Memory?.id
+      selectedBuild.Memory?.id,
+      (ram) => {
+        const minimumStickCount = Math.max(2, getRamProfile(ram).packStickCount);
+        return getRamProfile(ram, minimumStickCount).totalPrice;
+      }
     );
+    const generatedRamCount = chosenRam
+      ? Math.max(2, getRamProfile(chosenRam).packStickCount)
+      : 2;
 
     const chosenGpu = isOfficeApu
       ? null
@@ -2227,9 +2269,14 @@ export default function App() {
       Cases: chosenCase || null,
     };
 
-    let runningTotal = Object.values(generatedBuild)
-      .filter(Boolean)
-      .reduce((acc, item) => acc + Number(item.price || 0), 0);
+    let runningTotal = Object.entries(generatedBuild).reduce((acc, [category, item]) => {
+      if (!item) return acc;
+      const itemPrice =
+        category === 'Memory'
+          ? getRamProfile(item, generatedRamCount).totalPrice
+          : Number(item.price || 0);
+      return acc + itemPrice;
+    }, 0);
 
     if (runningTotal > budget && generatedBuild['Video Cards']) {
       const cheaperGpus = gpus.filter(
@@ -2240,14 +2287,19 @@ export default function App() {
       }
     }
 
-    runningTotal = Object.values(generatedBuild)
-      .filter(Boolean)
-      .reduce((acc, item) => acc + Number(item.price || 0), 0);
+    runningTotal = Object.entries(generatedBuild).reduce((acc, [category, item]) => {
+      if (!item) return acc;
+      const itemPrice =
+        category === 'Memory'
+          ? getRamProfile(item, generatedRamCount).totalPrice
+          : Number(item.price || 0);
+      return acc + itemPrice;
+    }, 0);
 
     const pickedPsuTier = getPsuProfile(generatedBuild['Power Supplies']).splTier;
 
     setSelectedBuild(generatedBuild);
-    setSelectedRamCount(2);
+    setSelectedRamCount(generatedRamCount);
     setAssistantStatus(
       `Recommended System Build (${assistantProfile} · ${targetSocket} · SPL PSU Tier ${pickedPsuTier}) — Total: ${peso(runningTotal)} / Target: ${peso(budget)}`
     );
@@ -2265,7 +2317,7 @@ export default function App() {
           reference_code: refCode,
           user_id: currentUser ? currentUser.id : null,
           customer_email: currentUser ? currentUser.email : 'Walk-in / Guest',
-          build_data: selectedBuild,
+          build_data: { ...selectedBuild, __ramStickCount: selectedRamCount },
           total_price: totalPrice,
           compatibility_score: compatibilityScore,
         },
@@ -2278,11 +2330,16 @@ export default function App() {
       const rowsHtml = CATEGORIES.map((cat) => {
         const item = selectedBuild[cat];
         if (!item) return '';
+        const ramDetails = cat === 'Memory' ? getRamProfile(item, selectedRamCount) : null;
+        const linePrice = ramDetails ? ramDetails.totalPrice : Number(item.price || 0);
+        const componentDescription = ramDetails
+          ? `${item.name} (${ramDetails.stickCount} x ${ramDetails.perStickCapacity}GB, ${ramDetails.packagesNeeded} package${ramDetails.packagesNeeded === 1 ? '' : 's'})`
+          : item.name;
         return `
           <tr>
             <td style="padding:8px;border-bottom:1px solid #cbd5e1;font-weight:bold;color:#334155;">${getCategoryLabel(cat)}</td>
-            <td style="padding:8px;border-bottom:1px solid #cbd5e1;color:#0f172a;">${item.name} <span style="color:#64748b;font-size:11px;">(${item.sku_code || item.id})</span></td>
-            <td style="padding:8px;border-bottom:1px solid #cbd5e1;text-align:right;font-family:sans-serif;font-weight:bold;">${peso(item.price)}</td>
+            <td style="padding:8px;border-bottom:1px solid #cbd5e1;color:#0f172a;">${componentDescription} <span style="color:#64748b;font-size:11px;">(${item.sku_code || item.id})</span></td>
+            <td style="padding:8px;border-bottom:1px solid #cbd5e1;text-align:right;font-family:sans-serif;font-weight:bold;">${peso(linePrice)}</td>
           </tr>`;
       }).join('');
 
@@ -2355,6 +2412,11 @@ export default function App() {
             : product.stock_status || 'In Stock',
       },
     }));
+
+    if (matchedCategory === 'Memory') {
+      const minimumKitStickCount = getRamProfile(product).packStickCount;
+      setSelectedRamCount((prev) => Math.max(Number(prev) || 1, minimumKitStickCount));
+    }
   };
 
   const handleSetExistingPart = (category, product) => {
@@ -2378,6 +2440,7 @@ export default function App() {
 
   const handleClearBuild = () => {
     setSelectedBuild(INITIAL_BUILD);
+    setSelectedRamCount(2);
     setAssistantStatus('');
   };
 
@@ -2404,7 +2467,7 @@ export default function App() {
         {
           user_id: currentUser.id,
           build_name: buildName,
-          build_data: selectedBuild,
+          build_data: { ...selectedBuild, __ramStickCount: selectedRamCount },
           total_price: totalPrice,
           compatibility_score: compatibilityScore,
         },
@@ -2420,7 +2483,18 @@ export default function App() {
   };
 
   const handleLoadSavedBuild = (buildRecord) => {
-    setSelectedBuild(buildRecord.build_data || INITIAL_BUILD);
+    const storedBuildData = buildRecord.build_data || INITIAL_BUILD;
+    const { __ramStickCount, ...buildData } = storedBuildData;
+    setSelectedBuild(buildData);
+    if (buildData.Memory) {
+      setSelectedRamCount(
+        Math.max(
+          Number(__ramStickCount) || 2,
+          getRamProfile(buildData.Memory).packStickCount,
+          2
+        )
+      );
+    }
     setActivePage('builder');
   };
 
@@ -2981,6 +3055,11 @@ export default function App() {
 
                   <p className="text-[11px] font-semibold text-white truncate">
                     {item ? item.name : <span className="text-slate-600 italic">Unassigned</span>}
+                    {isMemory && item && (
+                      <span className="text-blue-300 font-medium">
+                        {' '}· {getRamProfile(item, selectedRamCount).stickCount} x {getRamProfile(item, selectedRamCount).perStickCapacity}GB
+                      </span>
+                    )}
                   </p>
 
                   {isPsu && item && (
@@ -2995,7 +3074,13 @@ export default function App() {
                         <button
                           key={count}
                           onClick={() => setSelectedRamCount(count)}
-                          className={`px-1 text-[8px] font-bold rounded ${
+                          disabled={count < getRamProfile(item).packStickCount}
+                          title={
+                            count < getRamProfile(item).packStickCount
+                              ? `This listing is sold as a ${getRamProfile(item).packStickCount}-stick kit`
+                              : `Select ${count} physical RAM sticks`
+                          }
+                          className={`px-1 text-[8px] font-bold rounded disabled:opacity-30 disabled:cursor-not-allowed ${
                             selectedRamCount === count
                               ? 'bg-blue-600 text-white'
                               : 'text-slate-400'
@@ -3010,7 +3095,11 @@ export default function App() {
 
                 <div className="flex items-center gap-1.5 shrink-0 print-cell-price">
                   <span className="text-[11px] font-mono font-bold text-slate-200 print-price">
-                    {item ? (item.price ? peso(item.price) : 'Included') : '--'}
+                    {item
+                      ? item.price
+                        ? peso(isMemory ? getRamProfile(item, selectedRamCount).totalPrice : item.price)
+                        : 'Included'
+                      : '--'}
                   </span>
                   {item && (
                     <button
@@ -4172,7 +4261,17 @@ export default function App() {
                         <button
                           onClick={() => {
                             if (q.build_data) {
-                              setSelectedBuild(q.build_data);
+                              const { __ramStickCount, ...buildData } = q.build_data;
+                              setSelectedBuild(buildData);
+                              if (buildData.Memory) {
+                                setSelectedRamCount(
+                                  Math.max(
+                                    Number(__ramStickCount) || 2,
+                                    getRamProfile(buildData.Memory).packStickCount,
+                                    2
+                                  )
+                                );
+                              }
                               setActivePage('builder');
                             }
                           }}
