@@ -1,8 +1,10 @@
 export function isPrebundledKit(item) {
   if (!item) return false;
   const text = `${item.name || ''} ${item.specs || ''}`.toLowerCase();
-  return /\b(2x\d+|4x\d+|kit\s*of\s*[24]|dual[\s-]?channel\s*kit|quad[\s-]?channel\s*kit)\b/i.test(
-    text
+  return (
+    /(?:^|[^a-z0-9])[24]\s*x\s*\d+/.test(text) ||
+    /\b(dual|quad)[\s-]?channel\b/.test(text) ||
+    /\bkit\b/.test(text)
   );
 }
 

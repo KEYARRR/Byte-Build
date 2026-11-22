@@ -9,6 +9,17 @@ import {
   parseStorageProfile,
 } from './compat.js';
 
+const TRIM_PRIORITY = [
+  'Video Cards',
+  'Processors',
+  'Storage',
+  'Memory',
+  'Motherboards',
+  'Power Supplies',
+  'Cases',
+  'CPU Coolers',
+];
+
 export function runSmartBuildAssistant({
   products = [],
   budgetInput = 35000,
@@ -28,6 +39,7 @@ export function runSmartBuildAssistant({
       build: previousBuild,
       ramStickCount: 2,
       totalPrice: 0,
+      budget,
     };
   }
 
@@ -73,7 +85,9 @@ export function runSmartBuildAssistant({
     return ranked[0] || null;
   };
 
-  const apuPool = cpus.filter((c) => /\b\d{4}G\b/i.test(`${c.name || ''} ${c.specs || ''}`) || c.has_igpu === true);
+  const apuPool = cpus.filter(
+    (c) => /\b\d{4}G\b/i.test(`${c.name || ''} ${c.specs || ''}`) || c.has_igpu === true
+  );
   const chosenCpu =
     isOfficeApu && apuPool.length > 0
       ? pickBestWithinCap('Processors', apuPool, budget * weights.cpu)
@@ -84,7 +98,8 @@ export function runSmartBuildAssistant({
   const boardPool = compatibleBoards.length > 0 ? compatibleBoards : boards;
   const chosenBoard = pickBestWithinCap('Motherboards', boardPool, budget * weights.board);
 
-  const boardMemType = detectMemoryType(chosenBoard) || (targetSocket === 'AM5' ? 'DDR5' : 'DDR4');
+  const boardMemType =
+    detectMemoryType(chosenBoard) || (targetSocket === 'AM5' ? 'DDR5' : 'DDR4');
   const compatibleRams = rams.filter((r) => detectMemoryType(r) === boardMemType);
   const ramPool = compatibleRams.length > 0 ? compatibleRams : rams;
   const chosenRam = pickBestWithinCap('Memory', ramPool, budget * weights.ram);
@@ -96,11 +111,24 @@ export function runSmartBuildAssistant({
     return sp && !sp.isHdd && Number(sp.capacityGB || 0) >= 500;
   });
   const storagePool = fullSizeSsdPool.length > 0 ? fullSizeSsdPool : storages;
-  const chosenStorage = pickBestWithinCap('Storage', storagePool, Math.max(budget * weights.storage, 4000));
-  const chosenCooler = pickBestWithinCap('CPU Coolers', coolers, Math.max(budget * weights.cooler, 1500));
-  const chosenCase = pickBestWithinCap('Cases', cases, Math.max(budget * weights.case, 1800));
+  const chosenStorage = pickBestWithinCap('Storage', storagePool, budget * weights.storage);
+  const chosenCooler = pickBestWithinCap('CPU Coolers', coolers, budget * weights.cooler);
+  const chosenCase = pickBestWithinCap('Cases', cases, budget * weights.case);
 
-  const getMinimumSafePsu = (cpuPart, gpuPart, boardPart, ramPart, storagePart, coolerPart, casePart) => {
+  const otherPartsCost = (b, excludeCat) =>
+    CATEGORIES.reduce((sum, cat) => (cat === excludeCat ? sum : sum + itemCost(cat, b[cat])), 0);
+
+  const getMinimumSafePsu = (
+    cpuPart,
+    gpuPart,
+    boardPart,
+    ramPart,
+    storagePart,
+    coolerPart,
+    casePart,
+    maxPsuBudget = Infinity
+  ) => {
+    if (!psus.length) return null;
     const powerSummary = calculateRigWattage(
       {
         Processors: cpuPart,
@@ -119,12 +147,15 @@ export function runSmartBuildAssistant({
     const gpuTier = deriveComponentTier(gpuPart, 'Video Cards') || 2;
     const minRank = gpuTier >= 5 || cpuTier >= 5 ? 4 : 3;
 
-    const qualified = psus.filter((p) => {
+    const withinBudget = psus.filter((p) => itemCost('Power Supplies', p) <= maxPsuBudget);
+    const candidatePool = withinBudget.length > 0 ? withinBudget : psus;
+
+    const qualified = candidatePool.filter((p) => {
       const prof = getPsuProfile(p);
       return (prof.watts || 0) >= minSafeWatts && prof.tierRank >= minRank;
     });
-    const fallback = psus.filter((p) => (getPsuProfile(p).watts || 0) >= minSafeWatts);
-    return qualified[0] || fallback[0] || psus[0] || null;
+    const fallback = candidatePool.filter((p) => (getPsuProfile(p).watts || 0) >= minSafeWatts);
+    return qualified[0] || fallback[0] || candidatePool[0] || null;
   };
 
   const buildObj = {
@@ -133,21 +164,22 @@ export function runSmartBuildAssistant({
     'Video Cards': chosenGpu || null,
     Memory: chosenRam || null,
     Storage: chosenStorage || null,
-    'Power Supplies': getMinimumSafePsu(
-      chosenCpu,
-      chosenGpu,
-      chosenBoard,
-      chosenRam,
-      chosenStorage,
-      chosenCooler,
-      chosenCase
-    ),
+    'Power Supplies': null,
     'CPU Coolers': chosenCooler || null,
     Cases: chosenCase || null,
   };
 
-  const otherPartsCost = (b, excludeCat) =>
-    CATEGORIES.reduce((sum, cat) => (cat === excludeCat ? sum : sum + itemCost(cat, b[cat])), 0);
+  const remainingForPsu = Math.max(0, budget - otherPartsCost(buildObj, 'Power Supplies'));
+  buildObj['Power Supplies'] = getMinimumSafePsu(
+    buildObj.Processors,
+    buildObj['Video Cards'],
+    buildObj.Motherboards,
+    buildObj.Memory,
+    buildObj.Storage,
+    buildObj['CPU Coolers'],
+    buildObj.Cases,
+    remainingForPsu
+  );
 
   const poolByCategory = {
     Processors: cpus,
@@ -172,7 +204,7 @@ export function runSmartBuildAssistant({
   let improved = true;
   let steps = 0;
 
-  while (improved && steps < 32) {
+  while (improved && steps < 40) {
     improved = false;
     steps += 1;
 
@@ -206,6 +238,7 @@ export function runSmartBuildAssistant({
         const trial = { ...buildObj, [cat]: betterOptions[0] };
 
         if (cat === 'Processors' || cat === 'Video Cards') {
+          const psuCap = budget - otherPartsCost(trial, 'Power Supplies');
           const reqPsu = getMinimumSafePsu(
             trial.Processors,
             trial['Video Cards'],
@@ -213,7 +246,8 @@ export function runSmartBuildAssistant({
             trial.Memory,
             trial.Storage,
             trial['CPU Coolers'],
-            trial.Cases
+            trial.Cases,
+            psuCap
           );
           if (reqPsu && (getPsuProfile(trial['Power Supplies']).watts || 0) < (getPsuProfile(reqPsu).watts || 0)) {
             trial['Power Supplies'] = reqPsu;
@@ -228,30 +262,54 @@ export function runSmartBuildAssistant({
     }
   }
 
-  // Final ceiling guard: trim down if any total exceeds budget
-  const trimOrder = ['Video Cards', 'Processors', 'Storage', 'Memory', 'Motherboards', 'Power Supplies', 'Cases', 'CPU Coolers'];
-  for (const cat of trimOrder) {
-    if (calculateBuildTotal(buildObj, CATEGORIES, targetSticks) <= budget) break;
-    const pool = poolByCategory[cat] || [];
-    const currentCost = itemCost(cat, buildObj[cat]);
-    const allowedCap = budget - otherPartsCost(buildObj, cat);
-    const lowerOptions = pool
-      .filter((item) => itemCost(cat, item) < currentCost && itemCost(cat, item) <= allowedCap)
-      .sort((a, b) => itemCost(cat, b) - itemCost(cat, a));
-    if (lowerOptions.length > 0) {
-      buildObj[cat] = lowerOptions[0];
+  // Ceiling enforcement pass: step down to lower-cost options when over budget
+  let trimmed = true;
+  let trimSteps = 0;
+  while (trimmed && trimSteps < 40 && calculateBuildTotal(buildObj, CATEGORIES, targetSticks) > budget) {
+    trimmed = false;
+    trimSteps += 1;
+
+    for (const cat of TRIM_PRIORITY) {
+      if (calculateBuildTotal(buildObj, CATEGORIES, targetSticks) <= budget) break;
+      const pool = poolByCategory[cat] || [];
+      const currentCost = itemCost(cat, buildObj[cat]);
+      const allowedCap = budget - otherPartsCost(buildObj, cat);
+
+      const withinCapCheaper = pool
+        .filter((item) => itemCost(cat, item) < currentCost && itemCost(cat, item) <= allowedCap)
+        .sort((a, b) => itemCost(cat, b) - itemCost(cat, a));
+
+      if (withinCapCheaper.length > 0) {
+        buildObj[cat] = withinCapCheaper[0];
+        trimmed = true;
+        break;
+      }
+
+      const anyCheaper = pool
+        .filter((item) => itemCost(cat, item) < currentCost)
+        .sort((a, b) => itemCost(cat, b) - itemCost(cat, a));
+
+      if (anyCheaper.length > 0) {
+        buildObj[cat] = anyCheaper[0];
+        trimmed = true;
+        break;
+      }
     }
   }
 
   const totalPrice = calculateBuildTotal(buildObj, CATEGORIES, targetSticks);
   const psuInfo = getPsuProfile(buildObj['Power Supplies']);
+  const withinBudget = totalPrice <= budget;
 
   return {
     ok: true,
+    withinBudget,
     build: buildObj,
     ramStickCount: targetSticks,
     totalPrice,
     budget,
-    statusMessage: `Recommended Build (${profile} · ${targetSocket} · ${targetSticks}x RAM · PSU Tier ${psuInfo.tier}) — Total: ₱${totalPrice.toLocaleString()} / Budget: ₱${budget.toLocaleString()}`,
+    statusMessage: withinBudget
+      ? `Recommended Build (${profile} · ${targetSocket} · ${targetSticks}x RAM · PSU Tier ${psuInfo.tier}) — Total: ₱${totalPrice.toLocaleString()} / Budget: ₱${budget.toLocaleString()}`
+      : `Closest Build (${profile} · ${targetSocket} · ${targetSticks}x RAM · PSU Tier ${psuInfo.tier}) — Total: ₱${totalPrice.toLocaleString()} exceeds ₱${budget.toLocaleString()} budget`,
   };
 }
