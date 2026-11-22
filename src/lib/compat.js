@@ -1,623 +1,784 @@
-import { getPsuProfile, parseNumberFromText } from './power.js';
-import { deriveComponentTier, evaluateBottleneckBalance } from './scoring.js';
-
-const SOCKET_ALIASES = [
-  ['AM5', 'AM5'],
-  ['AM4', 'AM4'],
-  ['LGA1851', 'LGA1851'],
-  ['LGA1700', 'LGA1700'],
-];
-
-const CPU_SOCKET_PATTERNS = [
-  { socket: 'AM5', pattern: /RYZEN\s*(7000|8000|9000)|AM5/ },
-  { socket: 'AM4', pattern: /RYZEN\s*(1000|2000|3000|4000|5000)|ATHLON|AM4/ },
-  { socket: 'LGA1851', pattern: /CORE\s*ULTRA|LGA\s*1851|LGA1851/ },
-  { socket: 'LGA1700', pattern: /12TH|13TH|14TH|I[3579]-1[234]\d{2}|LGA\s*1700|LGA1700/ },
-];
-
-const MOBO_SOCKET_PATTERNS = [
-  { socket: 'AM5', pattern: /\b(A620|B650|B850|X670|X870|AM5)\b/ },
-  { socket: 'AM4', pattern: /\b(A520|B450|B550|X470|X570|AM4)\b/ },
-  { socket: 'LGA1851', pattern: /\b(H810|B860|Z890|LGA1851)\b/ },
-  { socket: 'LGA1700', pattern: /\b(H610|B660|B760|Z690|Z790|LGA1700)\b/ },
-];
-
-export function normalizeSocket(raw) {
-  const s = String(raw || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (!s) return null;
-  const hit = SOCKET_ALIASES.find(([needle]) => s.includes(needle));
-  return hit ? hit[1] : s;
-}
-
-export function detectCpuSocket(cpu) {
-  if (!cpu) return null;
-  if (cpu.socket) return normalizeSocket(cpu.socket);
-  const hay = `${cpu.name || ''} ${cpu.specs || ''}`.toUpperCase();
-  const hit = CPU_SOCKET_PATTERNS.find(({ pattern }) => pattern.test(hay));
-  return hit ? hit.socket : null;
-}
-
-export function detectMotherboardSocket(board) {
-  if (!board) return null;
-  if (board.socket) return normalizeSocket(board.socket);
-  const hay = `${board.name || ''} ${board.specs || ''}`.toUpperCase();
-  const hit = MOBO_SOCKET_PATTERNS.find(({ pattern }) => pattern.test(hay));
-  return hit ? hit.socket : null;
-}
-
-export function detectMemoryType(item) {
-  if (!item) return null;
-  if (item.memory_type) {
-    const m = String(item.memory_type).toUpperCase();
-    if (m.includes('DDR5')) return 'DDR5';
-    if (m.includes('DDR4')) return 'DDR4';
+export function detectCpuSocket(part) {
+  if (!part) return '';
+  if (part.socket) return String(part.socket).trim().toUpperCase();
+  const name = String(part.name || '').toUpperCase();
+  if (/(LGA\s?1700|12TH|13TH|14TH|I[3579]-1[234]\d{2})/.test(name)) {
+    return 'LGA1700';
   }
-  const hay = `${item.name || ''} ${item.specs || ''}`.toUpperCase();
-  if (/DDR5/.test(hay)) return 'DDR5';
-  if (/DDR4/.test(hay)) return 'DDR4';
-  return null;
-}
-
-export function parseStorageProfile(storage) {
-  if (!storage) return null;
-  const hay = `${storage.name || ''} ${storage.specs || ''} ${storage.capacity || ''}`;
-  const isHdd = /\bHDD\b|HARD\s*DRIVE|RPM/i.test(hay) && !/SSD|NVME/i.test(hay);
-  const capExplicit = Number(storage.capacity_gb || 0);
-  let capacityGB = capExplicit > 0 ? capExplicit : null;
-
-  if (!capacityGB) {
-    const tbMatch = hay.match(/\b(\d+(?:\.\d+)?)\s*TB\b/i);
-    const gbMatch = hay.match(/\b(\d{2,4})\s*GB\b/i);
-    if (tbMatch) capacityGB = Math.round(Number(tbMatch[1]) * 1000);
-    else if (gbMatch) capacityGB = Number(gbMatch[1]);
+  if (
+    /(AM5|7500|7600|7700|7800|7900|7950|8400F|8500G|8600G|8700G|9600|9700|9800|9900|9950)/.test(
+      name
+    )
+  ) {
+    return 'AM5';
   }
-
-  return { capacityGB, isHdd };
+  if (
+    /(AM4|ATHLON|200GE|2200G|3000G|3200G|3400G|3600|4500|5500|5600|5700|5800|5900|5950)/.test(
+      name
+    )
+  ) {
+    return 'AM4';
+  }
+  return '';
 }
+
+export function detectMotherboardSocket(part) {
+  if (!part) return '';
+  if (part.socket) return String(part.socket).trim().toUpperCase();
+  const name = String(part.name || '').toUpperCase();
+  if (/(A620|B650|B850|X670|X870)/.test(name)) return 'AM5';
+  if (/(A320|A520|B350|B450|B550|X370|X470|X570)/.test(name)) return 'AM4';
+  if (/(H610|B660|B760|H670|Z690|Z790)/.test(name)) return 'LGA1700';
+  return '';
+}
+
 
 export function getCustomPartFlags(build = {}) {
-  const entries = Object.entries(build || {});
-  const customEntries = entries.filter(([, item]) => Boolean(item?.isCustomInput));
+  const customCategories = Object.entries(build)
+    .filter(([, part]) => Boolean(part && (part.isCustomInput || part.unverified)))
+    .map(([cat]) => cat);
+
   return {
-    hasCustomPart: customEntries.length > 0,
-    customCategories: customEntries.map(([cat]) => cat),
-    customNames: customEntries.map(([, item]) => item.name).filter(Boolean),
+    hasCustomPart: customCategories.length > 0,
+    customCategories,
   };
 }
 
-export const COMPATIBILITY_RULES = [
-  {
-    id: 'RULE-SOCK-01',
-    category: 'Motherboards',
-    appliesTo: ['Processors', 'Motherboards'],
-    severity: 'fail',
-    description: 'CPU socket must match motherboard socket',
-    inputs: ['Processors.socket', 'Motherboards.socket'],
-    check(build) {
-      const cpu = build?.Processors;
-      const board = build?.Motherboards;
-      if (!cpu || !board) {
-        return {
-          status: 'unknown',
-          message: 'Socket compatibility cannot be verified until both CPU and motherboard are selected.',
-          details: { cpuSocket: detectCpuSocket(cpu), boardSocket: detectMotherboardSocket(board) },
-        };
-      }
-      const cpuSock = detectCpuSocket(cpu);
-      const boardSock = detectMotherboardSocket(board);
-      if (!cpuSock || !boardSock) {
-        return {
-          status: 'unknown',
-          message: `Missing socket data for comparison (CPU: ${cpuSock || 'unknown'}, Board: ${boardSock || 'unknown'}).`,
-          details: { cpuSocket: cpuSock, boardSocket: boardSock },
-        };
-      }
-      if (cpuSock !== boardSock) {
-        return {
-          status: 'fail',
-          message: `Incompatible sockets: CPU uses ${cpuSock} vs. motherboard uses ${boardSock}.`,
-          details: { cpuSocket: cpuSock, boardSocket: boardSock },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `Socket match confirmed: ${cpuSock} on both CPU and motherboard.`,
-        details: { cpuSocket: cpuSock, boardSocket: boardSock },
-      };
-    },
-  },
-  {
-    id: 'RULE-MEM-01',
-    category: 'Memory',
-    appliesTo: ['Memory', 'Motherboards'],
-    severity: 'fail',
-    description: 'RAM generation (DDR4/DDR5) must match motherboard memory support',
-    inputs: ['Memory.memory_type', 'Motherboards.memory_type'],
-    check(build) {
-      const ram = build?.Memory;
-      const board = build?.Motherboards;
-      if (!ram || !board) {
-        return {
-          status: 'unknown',
-          message: 'Memory generation check requires both RAM and motherboard.',
-          details: { ramType: detectMemoryType(ram), boardRamType: detectMemoryType(board) },
-        };
-      }
-      const ramType = detectMemoryType(ram);
-      const boardType = detectMemoryType(board);
-      if (!ramType || !boardType) {
-        return {
-          status: 'unknown',
-          message: `Missing DDR standard info (RAM: ${ramType || 'unknown'}, Board: ${boardType || 'unknown'}).`,
-          details: { ramType, boardRamType: boardType },
-        };
-      }
-      if (ramType !== boardType) {
-        return {
-          status: 'fail',
-          message: `Memory mismatch: RAM is ${ramType} vs. motherboard supports ${boardType}.`,
-          details: { ramType, boardRamType: boardType },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `Memory standard match: ${ramType} supported by motherboard.`,
-        details: { ramType, boardRamType: boardType },
-      };
-    },
-  },
-  {
-    id: 'RULE-STOR-01',
-    category: 'Storage',
-    appliesTo: ['Storage'],
-    severity: 'warn',
-    description: 'Primary storage should be an SSD with at least 500GB capacity',
-    inputs: ['Storage.capacity_gb', 'Storage.specs'],
-    check(build) {
-      const storage = build?.Storage;
-      if (!storage) {
-        return {
-          status: 'unknown',
-          message: 'No storage drive selected yet.',
-          details: { capacityGB: null, isHdd: null },
-        };
-      }
-      const prof = parseStorageProfile(storage);
-      if (!prof || !prof.capacityGB) {
-        return {
-          status: 'unknown',
-          message: `Storage capacity is not specified for "${storage.name}".`,
-          details: prof || {},
-        };
-      }
-      if (prof.isHdd) {
-        return {
-          status: 'warn',
-          message: `"${storage.name}" is an HDD (${prof.capacityGB}GB); an SSD (500GB+) is recommended for OS responsiveness.`,
-          details: prof,
-        };
-      }
-      if (prof.capacityGB < 500) {
-        return {
-          status: 'warn',
-          message: `Storage capacity is ${prof.capacityGB}GB (below the 500GB recommended minimum).`,
-          details: prof,
-        };
-      }
-      return {
-        status: 'pass',
-        message: `Storage meets baseline: ${prof.capacityGB}GB SSD.`,
-        details: prof,
-      };
-    },
-  },
-  {
-    id: 'RULE-PSU-01',
-    category: 'Power Supplies',
-    appliesTo: ['Power Supplies', 'Processors', 'Video Cards'],
-    severity: 'fail',
-    description: 'PSU wattage must cover estimated peak draw and tier requirements',
-    inputs: ['Power Supplies.wattage', 'Power Supplies.psu_tier', 'estimatedPeakWatts'],
-    check(build, ctx = {}) {
-      const psu = build?.['Power Supplies'];
-      const peakWatts = Number(ctx.peakWatts || 0);
-      const recWatts = Number(ctx.recommendedPsuWatts || 0);
-      if (!psu) {
-        return {
-          status: 'unknown',
-          message: 'No power supply selected.',
-          details: { psuWatts: null, peakWatts, recWatts },
-        };
-      }
-      const prof = getPsuProfile(psu);
-      if (!prof.watts) {
-        return {
-          status: 'unknown',
-          message: `PSU wattage is missing for "${psu.name}".`,
-          details: { psuWatts: null, peakWatts, recWatts },
-        };
-      }
-      if (peakWatts > 0 && prof.watts < peakWatts) {
-        return {
-          status: 'fail',
-          message: `PSU rated ${prof.watts}W is below estimated peak draw (${peakWatts}W).`,
-          details: { psuWatts: prof.watts, peakWatts, recWatts },
-        };
-      }
-      if (recWatts > 0 && prof.watts < recWatts) {
-        return {
-          status: 'warn',
-          message: `PSU rated ${prof.watts}W is below recommended headroom (${recWatts}W vs. ${peakWatts}W peak).`,
-          details: { psuWatts: prof.watts, peakWatts, recWatts },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `PSU ${prof.watts}W (Tier ${prof.tier}) covers ${peakWatts}W peak load (rec: ${recWatts}W).`,
-        details: { psuWatts: prof.watts, tier: prof.tier, peakWatts, recWatts },
-      };
-    },
-  },
-  {
-    id: 'RULE-GPU-LEN-01',
-    category: 'Cases',
-    appliesTo: ['Video Cards', 'Cases'],
-    severity: 'fail',
-    description: 'GPU length must fit within case maximum GPU clearance',
-    inputs: ['Video Cards.length_mm', 'Cases.max_gpu_length_mm'],
-    check(build) {
-      const gpu = build?.['Video Cards'];
-      const pcCase = build?.Cases;
-      if (!gpu) {
-        return { status: 'pass', message: 'No discrete GPU selected; case GPU clearance not required.', details: {} };
-      }
-      if (!pcCase) {
-        return { status: 'unknown', message: 'Case not selected to verify GPU length clearance.', details: {} };
-      }
-      const gpuLen = Number(gpu.length_mm) || parseNumberFromText(`${gpu.name} ${gpu.specs}`, [/(\d{3})\s*mm/i]);
-      const maxLen =
-        Number(pcCase.max_gpu_length_mm) ||
-        parseNumberFromText(`${pcCase.name} ${pcCase.specs}`, [/max\s*gpu[^\d]*(\d{3})\s*mm/i, /(\d{3})\s*mm\s*gpu/i]);
-      if (!gpuLen || !maxLen) {
-        return {
-          status: 'unknown',
-          message: `GPU length (${gpuLen || 'unknown'}mm) vs. case max GPU clearance (${maxLen || 'unknown'}mm) is incomplete.`,
-          details: { gpuLen, maxLen },
-        };
-      }
-      if (gpuLen > maxLen) {
-        return {
-          status: 'fail',
-          message: `GPU length (${gpuLen}mm) exceeds case max clearance (${maxLen}mm).`,
-          details: { gpuLen, maxLen },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `GPU length (${gpuLen}mm) fits inside case max clearance (${maxLen}mm).`,
-        details: { gpuLen, maxLen },
-      };
-    },
-  },
-  {
-    id: 'RULE-CLR-HGT-01',
-    category: 'CPU Coolers',
-    appliesTo: ['CPU Coolers', 'Cases'],
-    severity: 'fail',
-    description: 'Air cooler height must fit within case maximum cooler clearance',
-    inputs: ['CPU Coolers.cooler_height_mm', 'Cases.max_cooler_height_mm'],
-    check(build) {
-      const cooler = build?.['CPU Coolers'];
-      const pcCase = build?.Cases;
-      if (!cooler || !pcCase) {
-        return { status: 'unknown', message: 'Cooler or case missing for cooler height check.', details: {} };
-      }
-      const isLiquid = /aio|liquid|240mm|280mm|360mm/i.test(`${cooler.name || ''} ${cooler.specs || ''}`);
-      if (isLiquid) {
-        return {
-          status: 'unknown',
-          message: 'Liquid/AIO radiator clearance requires radiator support check (not tower height).',
-          details: { isLiquid: true },
-        };
-      }
-      const heightMm =
-        Number(cooler.cooler_height_mm) ||
-        parseNumberFromText(`${cooler.name} ${cooler.specs}`, [/(\d{2,3})\s*mm/i]);
-      const maxHeightMm =
-        Number(pcCase.max_cooler_height_mm) ||
-        parseNumberFromText(`${pcCase.name} ${pcCase.specs}`, [/cooler[^\d]*(\d{2,3})\s*mm/i]);
-      if (!heightMm || !maxHeightMm) {
-        return {
-          status: 'unknown',
-          message: `Cooler height (${heightMm || 'unknown'}mm) vs. case clearance (${maxHeightMm || 'unknown'}mm) is incomplete.`,
-          details: { heightMm, maxHeightMm },
-        };
-      }
-      if (heightMm > maxHeightMm) {
-        return {
-          status: 'fail',
-          message: `Cooler height (${heightMm}mm) exceeds case limit (${maxHeightMm}mm).`,
-          details: { heightMm, maxHeightMm },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `Cooler height (${heightMm}mm) fits within case limit (${maxHeightMm}mm).`,
-        details: { heightMm, maxHeightMm },
-      };
-    },
-  },
-  {
-    id: 'RULE-MFF-01',
-    category: 'Cases',
-    appliesTo: ['Motherboards', 'Cases'],
-    severity: 'fail',
-    description: 'Motherboard form factor must be supported by the case',
-    inputs: ['Motherboards.form_factor', 'Cases.supported_form_factors'],
-    check(build) {
-      const board = build?.Motherboards;
-      const pcCase = build?.Cases;
-      if (!board || !pcCase) {
-        return { status: 'unknown', message: 'Motherboard or case missing for form factor check.', details: {} };
-      }
-      const boardFf = String(board.form_factor || '').trim().toUpperCase();
-      const caseFfRaw = String(pcCase.supported_form_factors || '').trim().toUpperCase();
-      if (!boardFf || !caseFfRaw) {
-        return {
-          status: 'unknown',
-          message: `Form factor data missing (Board: ${boardFf || 'unknown'}, Case: ${caseFfRaw || 'unknown'}).`,
-          details: { boardFf, supportedFormFactors: caseFfRaw },
-        };
-      }
-      const supportedList = caseFfRaw.split(/[,/|;]+/).map((s) => s.trim()).filter(Boolean);
-      if (!supportedList.includes(boardFf)) {
-        return {
-          status: 'fail',
-          message: `Board form factor ${boardFf} is not listed under case supported form factors (${supportedList.join(', ')}).`,
-          details: { boardFf, supportedFormFactors: supportedList },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `Board form factor ${boardFf} is supported by case (${supportedList.join(', ')}).`,
-        details: { boardFf, supportedFormFactors: supportedList },
-      };
-    },
-  },
-  {
-    id: 'RULE-SLOTS-01',
-    category: 'Storage',
-    appliesTo: ['Motherboards', 'Storage'],
-    severity: 'warn',
-    description: 'Motherboard M.2/SATA slot counts should cover selected storage interfaces',
-    inputs: ['Motherboards.m2_slots', 'Motherboards.sata_ports', 'Storage.storage_interface'],
-    check(build) {
-      const board = build?.Motherboards;
-      const storage = build?.Storage;
-      if (!board || !storage) {
-        return { status: 'unknown', message: 'Motherboard or storage missing for slot check.', details: {} };
-      }
-      const iface = String(storage.storage_interface || storage.specs || '').toUpperCase();
-      const isM2 = /M\.2|NVME/.test(iface);
-      const isSata = /SATA/.test(iface) && !isM2;
+function isCustomPart(part) {
+  return Boolean(part && (part.isCustomInput || part.unverified));
+}
 
-      if (isM2) {
-        const m2Slots = Number(board.m2_slots);
-        if (!Number.isFinite(m2Slots) || board.m2_slots === null || board.m2_slots === undefined) {
-          return { status: 'unknown', message: 'Motherboard M.2 slot count is unknown.', details: { required: 'M.2', m2Slots: null } };
-        }
-        return m2Slots >= 1
-          ? { status: 'pass', message: `Motherboard provides ${m2Slots} M.2 slot(s) for M.2 storage.`, details: { m2Slots } }
-          : { status: 'fail', message: 'Motherboard has 0 M.2 slots for selected M.2 drive.', details: { m2Slots } };
-      }
+function normalizeFormFactor(raw) {
+  const txt = String(raw || '').toUpperCase();
+  if (!txt) return '';
+  if (txt.includes('MINI-ITX') || txt.includes('ITX')) return 'ITX';
+  if (txt.includes('MICRO-ATX') || txt.includes('M-ATX') || txt.includes('MATX')) return 'MATX';
+  if (txt.includes('E-ATX') || txt.includes('EATX')) return 'EATX';
+  if (txt.includes('ATX')) return 'ATX';
+  return '';
+}
 
-      if (isSata) {
-        const sataPorts = Number(board.sata_ports);
-        if (!Number.isFinite(sataPorts) || board.sata_ports === null || board.sata_ports === undefined) {
-          return { status: 'unknown', message: 'Motherboard SATA port count is unknown.', details: { required: 'SATA', sataPorts: null } };
-        }
-        return sataPorts >= 1
-          ? { status: 'pass', message: `Motherboard provides ${sataPorts} SATA port(s) for SATA storage.`, details: { sataPorts } }
-          : { status: 'fail', message: 'Motherboard has 0 SATA ports for selected SATA drive.', details: { sataPorts } };
-      }
+function inferBoardFormFactor(board) {
+  if (!board) return '';
+  if (board.form_factor) return normalizeFormFactor(board.form_factor);
+  if (isCustomPart(board)) return '';
+  const combined = `${board.name || ''} ${board.specs || ''}`.toUpperCase();
+  if (/(MINI-ITX|\bITX\b)/.test(combined)) return 'ITX';
+  if (/(MICRO-ATX|M-ATX|MATX|\b(?:A520|B450|B550|A620|B650|B760|B660|H610)M\b)/.test(combined)) {
+    return 'MATX';
+  }
+  if (/(E-ATX|EATX)/.test(combined)) return 'EATX';
+  if (/\bATX\b/.test(combined)) return 'ATX';
+  return '';
+}
 
-      return { status: 'unknown', message: 'Storage interface type (M.2 vs. SATA) is not specified.', details: {} };
-    },
-  },
-  {
-    id: 'RULE-PSU-CONN-01',
-    category: 'Power Supplies',
-    appliesTo: ['Power Supplies', 'Video Cards'],
-    severity: 'fail',
-    description: 'PSU PCIe 8-pin / 12VHPWR connectors must cover GPU power connectors',
-    inputs: ['Power Supplies.pcie_8pin_count', 'Power Supplies.has_12vhpwr', 'Video Cards.gpu_pcie_8pin_req', 'Video Cards.gpu_requires_12vhpwr'],
-    check(build) {
-      const gpu = build?.['Video Cards'];
-      const psu = build?.['Power Supplies'];
-      if (!gpu) {
-        return { status: 'pass', message: 'No discrete GPU selected; GPU power connectors not required.', details: {} };
-      }
-      if (!psu) {
-        return { status: 'unknown', message: 'PSU not selected to verify GPU power connectors.', details: {} };
-      }
-      const req12v = Boolean(gpu.gpu_requires_12vhpwr);
-      const has12v = psu.has_12vhpwr === true;
-      const req8Pin =
-        gpu.gpu_pcie_8pin_req !== null && gpu.gpu_pcie_8pin_req !== undefined
-          ? Number(gpu.gpu_pcie_8pin_req)
-          : null;
-      const has8Pin =
-        psu.pcie_8pin_count !== null && psu.pcie_8pin_count !== undefined
-          ? Number(psu.pcie_8pin_count)
-          : null;
+function inferSupportedFormFactors(pcCase) {
+  if (!pcCase) return [];
+  if (pcCase.supported_form_factors) {
+    return String(pcCase.supported_form_factors)
+      .split(',')
+      .map((s) => normalizeFormFactor(s))
+      .filter(Boolean);
+  }
+  if (pcCase.form_factor) {
+    const ff = normalizeFormFactor(pcCase.form_factor);
+    if (ff === 'ATX') return ['ATX', 'MATX', 'ITX'];
+    if (ff === 'MATX') return ['MATX', 'ITX'];
+    if (ff === 'ITX') return ['ITX'];
+  }
+  if (isCustomPart(pcCase)) return [];
+  const combined = `${pcCase.name || ''} ${pcCase.specs || ''}`.toUpperCase();
+  if (/(MINI-ITX|\bITX\b)/.test(combined) && !combined.includes('ATX')) return ['ITX'];
+  if (/(MICRO-ATX|M-ATX|MATX)/.test(combined)) return ['MATX', 'ITX'];
+  if (/\bATX\b/.test(combined) || combined.includes('MID TOWER') || combined.includes('MID-TOWER')) {
+    return ['ATX', 'MATX', 'ITX'];
+  }
+  return [];
+}
 
-      if (req12v && (psu.has_12vhpwr === undefined || psu.has_12vhpwr === null)) {
-        return { status: 'unknown', message: 'GPU requires 12VHPWR, but PSU 12VHPWR support is unknown.', details: { req12v, has12v: null } };
-      }
-      if (req12v && !has12v) {
-        return { status: 'fail', message: 'GPU requires 12VHPWR connector, which is not listed on the selected PSU.', details: { req12v, has12v } };
-      }
-      if (req8Pin !== null && has8Pin === null) {
-        return { status: 'unknown', message: `GPU requires ${req8Pin}x 8-pin PCIe, but PSU 8-pin count is unknown.`, details: { req8Pin, has8Pin: null } };
-      }
-      if (req8Pin !== null && has8Pin !== null && has8Pin < req8Pin) {
-        return { status: 'fail', message: `PSU has ${has8Pin}x 8-pin PCIe connectors vs. GPU requiring ${req8Pin}x.`, details: { req8Pin, has8Pin } };
-      }
-      return {
-        status: 'pass',
-        message: `PSU connector support verified (8-pin: ${has8Pin ?? 'N/A'} vs req ${req8Pin ?? 0}; 12VHPWR: ${has12v ? 'Yes' : 'No'}).`,
-        details: { req8Pin, has8Pin, req12v, has12v },
-      };
-    },
-  },
-  {
-    id: 'RULE-CLR-SOCK-01',
-    category: 'CPU Coolers',
-    appliesTo: ['CPU Coolers', 'Processors'],
-    severity: 'fail',
-    description: 'CPU cooler must support the selected CPU socket',
-    inputs: ['CPU Coolers.supported_sockets', 'Processors.socket'],
-    check(build) {
-      const cooler = build?.['CPU Coolers'];
-      const cpu = build?.Processors;
-      if (!cooler || !cpu) {
-        return { status: 'unknown', message: 'Cooler or CPU missing for socket support check.', details: {} };
-      }
-      const cpuSock = detectCpuSocket(cpu);
-      const rawSupported = String(cooler.supported_sockets || '').toUpperCase();
-      if (!cpuSock || !rawSupported) {
-        return {
-          status: 'unknown',
-          message: `Cooler socket support (${rawSupported || 'unknown'}) or CPU socket (${cpuSock || 'unknown'}) is missing.`,
-          details: { cpuSocket: cpuSock, supportedSockets: rawSupported || null },
-        };
-      }
-      const list = rawSupported.split(/[,/|;]+/).map((s) => normalizeSocket(s)).filter(Boolean);
-      if (!list.includes(cpuSock)) {
-        return {
-          status: 'fail',
-          message: `Cooler supported sockets (${list.join(', ')}) do not include CPU socket ${cpuSock}.`,
-          details: { cpuSocket: cpuSock, supportedSockets: list },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `Cooler supports CPU socket ${cpuSock}.`,
-        details: { cpuSocket: cpuSock, supportedSockets: list },
-      };
-    },
-  },
-  {
-    id: 'RULE-RAM-LIM-01',
-    category: 'Memory',
-    appliesTo: ['Memory', 'Motherboards'],
-    severity: 'warn',
-    description: 'Total RAM capacity and speed should not exceed motherboard limits',
-    inputs: ['Memory.capacity_gb', 'Memory.speed_mhz', 'Motherboards.max_ram_gb', 'Motherboards.max_ram_mhz'],
-    check(build, ctx = {}) {
-      const ram = build?.Memory;
-      const board = build?.Motherboards;
-      if (!ram || !board) {
-        return { status: 'unknown', message: 'RAM or motherboard missing for capacity/speed limit check.', details: {} };
-      }
-      const sticks = Math.max(1, Number(ctx.ramStickCount) || 1);
-      const kitMatch = `${ram.name || ''} ${ram.specs || ''}`.match(/\b(\d+)x(\d+)\s*GB\b/i);
-      const perStickGb =
-        Number(ram.capacity_gb) ||
-        (kitMatch ? Number(kitMatch[2]) : parseNumberFromText(`${ram.name} ${ram.specs}`, [/(\d{1,3})\s*GB/i]));
-      const totalGb = kitMatch
-        ? Number(kitMatch[1]) * Number(kitMatch[2])
-        : perStickGb
-        ? perStickGb * sticks
-        : null;
+function inferCoolerSockets(cooler) {
+  if (!cooler) return [];
+  if (cooler.supported_sockets) {
+    return String(cooler.supported_sockets)
+      .toUpperCase()
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  if (isCustomPart(cooler)) return [];
+  const combined = `${cooler.name || ''} ${cooler.specs || ''}`.toUpperCase();
+  const explicit = [];
+  if (combined.includes('AM4')) explicit.push('AM4');
+  if (combined.includes('AM5')) explicit.push('AM5');
+  if (combined.includes('LGA1700') || combined.includes('LGA 1700')) explicit.push('LGA1700');
+  if (explicit.length > 0) return explicit;
+  if (
+    /(AG400|AK400|AK500|AK620|LS520|LS720|LT520|LT720|HYPER\s?212|GAMMAXX|PEERLESS ASSASSIN|PHANTOM SPIRIT|SE-214|SE-224|DEEPCOOL|THERMALRIGHT|ID-COOLING|NOCTUA|AIO|240MM|360MM)/.test(
+      combined
+    )
+  ) {
+    return ['AM4', 'AM5', 'LGA1700'];
+  }
+  return [];
+}
 
-      const ramMhz =
-        Number(ram.speed_mhz) ||
-        parseNumberFromText(`${ram.name} ${ram.specs}`, [/(\d{4})\s*(?:MHz|MT\/s)/i]);
-      const maxGb =
-        board.max_ram_gb !== null && board.max_ram_gb !== undefined ? Number(board.max_ram_gb) : null;
-      const maxMhz =
-        board.max_ram_mhz !== null && board.max_ram_mhz !== undefined ? Number(board.max_ram_mhz) : null;
+function inferM2Slots(board) {
+  if (!board) return null;
+  if (board.m2_slots !== undefined && board.m2_slots !== null) {
+    return Number(board.m2_slots);
+  }
+  if (isCustomPart(board)) return null;
+  const combined = `${board.name || ''} ${board.specs || ''}`.toUpperCase();
+  const match = combined.match(/(\d)\s*X?\s*M\.2/);
+  if (match) return Number(match[1]);
+  if (/(X670|X870|Z690|Z790)/.test(combined)) return 4;
+  if (/(B650|B850|B760|B550|B450|A520|A620|H610)/.test(combined)) return 2;
+  return null;
+}
 
-      if ((totalGb && maxGb && totalGb > maxGb) || (ramMhz && maxMhz && ramMhz > maxMhz)) {
-        return {
-          status: 'fail',
-          message: `RAM exceeds board limit: ${totalGb || '?'}GB/${ramMhz || '?'}MHz vs. board max ${maxGb || '?'}GB/${maxMhz || '?'}MHz.`,
-          details: { totalGb, maxGb, ramMhz, maxMhz },
-        };
-      }
-      if (!maxGb && !maxMhz) {
-        return {
-          status: 'unknown',
-          message: 'Motherboard max RAM capacity and speed limits are not specified.',
-          details: { totalGb, ramMhz, maxGb, maxMhz },
-        };
-      }
-      return {
-        status: 'pass',
-        message: `RAM within board limits (${totalGb ?? '?'}GB / ${ramMhz ?? '?'}MHz).`,
-        details: { totalGb, maxGb, ramMhz, maxMhz },
-      };
-    },
-  },
-  {
-    id: 'RULE-IGPU-01',
-    category: 'Video Cards',
-    appliesTo: ['Video Cards', 'Processors'],
-    severity: 'warn',
-    description: 'Display output requires a discrete GPU or a CPU with integrated graphics',
-    inputs: ['Video Cards', 'Processors.has_igpu'],
-    check(build) {
-      const gpu = build?.['Video Cards'];
-      const cpu = build?.Processors;
-      if (gpu) {
-        return { status: 'pass', message: `Discrete GPU selected (${gpu.name}); display output available.`, details: { hasDiscreteGpu: true } };
-      }
-      if (!cpu) {
-        return { status: 'unknown', message: 'No GPU selected and CPU integrated graphics status is unknown.', details: { hasDiscreteGpu: false, hasIgpu: null } };
-      }
-      if (cpu.has_igpu === true) {
-        return { status: 'pass', message: `No discrete GPU selected, but CPU (${cpu.name}) has integrated graphics.`, details: { hasDiscreteGpu: false, hasIgpu: true } };
-      }
-      if (cpu.has_igpu === false) {
-        return { status: 'fail', message: `No discrete GPU selected and CPU (${cpu.name}) lacks integrated graphics (no display output).`, details: { hasDiscreteGpu: false, hasIgpu: false } };
-      }
-      return {
+function inferBoardRamLimits(board) {
+  if (!board) return { maxGb: null, maxMhz: null };
+  const maxGb =
+    board.max_ram_gb !== undefined && board.max_ram_gb !== null
+      ? Number(board.max_ram_gb)
+      : null;
+  const maxMhz =
+    board.max_ram_mhz !== undefined && board.max_ram_mhz !== null
+      ? Number(board.max_ram_mhz)
+      : null;
+
+  if (maxGb !== null || maxMhz !== null) {
+    return { maxGb, maxMhz };
+  }
+  if (isCustomPart(board)) return { maxGb: null, maxMhz: null };
+
+  const combined = `${board.name || ''} ${board.specs || ''}`.toUpperCase();
+  if (/(B650|B850|X670|X870|AM5)/.test(combined)) {
+    return { maxGb: 192, maxMhz: 6400 };
+  }
+  if (/(B760|Z690|Z790|H610|B660)/.test(combined)) {
+    return { maxGb: 128, maxMhz: 5600 };
+  }
+  if (/(B550|B450|A520|A320|X570)/.test(combined)) {
+    return { maxGb: 128, maxMhz: 4400 };
+  }
+  return { maxGb: null, maxMhz: null };
+}
+
+function inferGpuLengthMm(gpu) {
+  if (!gpu) return null;
+  if (gpu.length_mm !== undefined && gpu.length_mm !== null) return Number(gpu.length_mm);
+  if (isCustomPart(gpu)) return null;
+  const combined = `${gpu.name || ''} ${gpu.specs || ''}`.toUpperCase();
+  const mmMatch = combined.match(/(\d{3})\s*MM/);
+  if (mmMatch) return Number(mmMatch[1]);
+  if (/(TRIPLE|3X|GAMING OC|STRIX|SUPRIM|AORUS|4080|4090|5080|5090|7900)/.test(combined)) return 315;
+  if (/(MINI|ITX|LP|LOW PROFILE|SINGLE FAN)/.test(combined)) return 185;
+  if (/(RTX|RX|GTX|ARC|RADEON|GEFORCE)/.test(combined)) return 245;
+  return null;
+}
+
+function inferCaseClearance(pcCase) {
+  if (!pcCase) return { maxGpuMm: null, maxCoolerMm: null };
+  const maxGpuMm =
+    pcCase.max_gpu_length_mm !== undefined && pcCase.max_gpu_length_mm !== null
+      ? Number(pcCase.max_gpu_length_mm)
+      : null;
+  const maxCoolerMm =
+    pcCase.max_cooler_height_mm !== undefined && pcCase.max_cooler_height_mm !== null
+      ? Number(pcCase.max_cooler_height_mm)
+      : null;
+
+  if (maxGpuMm !== null || maxCoolerMm !== null) {
+    return { maxGpuMm, maxCoolerMm };
+  }
+  if (isCustomPart(pcCase)) return { maxGpuMm: null, maxCoolerMm: null };
+
+  const combined = `${pcCase.name || ''} ${pcCase.specs || ''}`.toUpperCase();
+  if (/(MINI-ITX|\bITX\b)/.test(combined) && !combined.includes('ATX')) {
+    return { maxGpuMm: 280, maxCoolerMm: 140 };
+  }
+  if (/(MICRO-ATX|M-ATX|MATX)/.test(combined)) {
+    return { maxGpuMm: 330, maxCoolerMm: 160 };
+  }
+  if (/\bATX\b/.test(combined) || combined.includes('MID TOWER') || combined.includes('MID-TOWER')) {
+    return { maxGpuMm: 360, maxCoolerMm: 165 };
+  }
+  return { maxGpuMm: null, maxCoolerMm: null };
+}
+
+function inferCoolerHeightMm(cooler) {
+  if (!cooler) return null;
+  if (cooler.cooler_height_mm !== undefined && cooler.cooler_height_mm !== null) {
+    return Number(cooler.cooler_height_mm);
+  }
+  if (isCustomPart(cooler)) return null;
+  const combined = `${cooler.name || ''} ${cooler.specs || ''}`.toUpperCase();
+  const mmMatch = combined.match(/(\d{2,3})\s*MM/);
+  if (mmMatch && Number(mmMatch[1]) >= 40 && Number(mmMatch[1]) <= 180) {
+    return Number(mmMatch[1]);
+  }
+  if (/(240|360|AIO|LIQUID)/.test(combined)) return 55;
+  if (/(STOCK|WRAITH|LOW PROFILE)/.test(combined)) return 70;
+  if (
+    /(AG400|AK400|AK500|AK620|HYPER\s?212|GAMMAXX|PEERLESS ASSASSIN|PHANTOM SPIRIT|SE-214|SE-224|DEEPCOOL|THERMALRIGHT|ID-COOLING|NOCTUA)/.test(
+      combined
+    )
+  ) {
+    return 155;
+  }
+  return null;
+}
+
+function inferHasIgpu(cpu) {
+  if (!cpu) return null;
+  if (typeof cpu.has_igpu === 'boolean') return cpu.has_igpu;
+  if (isCustomPart(cpu)) return null;
+  const name = String(cpu.name || '').toUpperCase();
+  if (/(F\b|KF\b|KSF\b)/.test(name)) return false;
+  if (/RYZEN\s+[3579]\s+[12345]\d{3}X?\b/.test(name) && !name.includes('G')) return false;
+  if (
+    /(G\b|GE\b|ATHLON|7600|7700|7800X3D|7900|7950|9600|9700|9800X3D|9900|9950|CORE I[3579])/.test(
+      name
+    )
+  ) {
+    return true;
+  }
+  return null;
+}
+
+export function evaluateBuildRules(build = {}, ctx = {}) {
+  const results = [];
+  const cpu = build.Processors || null;
+  const board = build.Motherboards || null;
+  const gpu = build['Video Cards'] || null;
+  const ram = build.Memory || null;
+  const storage = build.Storage || null;
+  const psu = build['Power Supplies'] || null;
+  const cooler = build['CPU Coolers'] || null;
+  const pcCase = build.Cases || null;
+
+  // 1. RULE-SOCK-01: CPU <-> Motherboard Socket
+  const cpuSocket = detectCpuSocket(cpu);
+  const boardSocket = detectMotherboardSocket(board);
+  const sockUnverified = isCustomPart(cpu) || isCustomPart(board);
+  if (!cpu || !board || !cpuSocket || !boardSocket) {
+    results.push({
+      ruleId: 'RULE-SOCK-01',
+      category: 'Processors',
+      title: 'CPU & Motherboard Socket',
+      status: 'unknown',
+      unverified: sockUnverified,
+      message: `Socket comparison incomplete (CPU: ${cpuSocket || 'unknown'}, Board: ${boardSocket || 'unknown'}).`,
+      recommendation: 'Ensure both CPU and Motherboard specify matching sockets.',
+    });
+  } else if (cpuSocket !== boardSocket) {
+    results.push({
+      ruleId: 'RULE-SOCK-01',
+      category: 'Processors',
+      title: 'CPU & Motherboard Socket',
+      status: 'fail',
+      unverified: sockUnverified,
+      message: `Socket mismatch: ${cpu.name} (${cpuSocket}) is incompatible with ${board.name} (${boardSocket}).`,
+      recommendation: `Choose an ${cpuSocket} motherboard or matching ${boardSocket} CPU.`,
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-SOCK-01',
+      category: 'Processors',
+      title: 'CPU & Motherboard Socket',
+      status: 'pass',
+      unverified: sockUnverified,
+      message: `Socket ${cpuSocket} verified between CPU and Motherboard.`,
+    });
+  }
+
+  // 2. RULE-MEM-01: RAM <-> Motherboard Memory Type
+  const ramType =
+    ram?.memory_type ||
+    (/DDR5/i.test(`${ram?.name || ''} ${ram?.specs || ''}`)
+      ? 'DDR5'
+      : /DDR4/i.test(`${ram?.name || ''} ${ram?.specs || ''}`)
+      ? 'DDR4'
+      : '');
+  const boardMemType =
+    board?.memory_type ||
+    (/DDR5/i.test(`${board?.name || ''} ${board?.specs || ''}`) || boardSocket === 'AM5'
+      ? 'DDR5'
+      : /DDR4/i.test(`${board?.name || ''} ${board?.specs || ''}`) || boardSocket === 'AM4'
+      ? 'DDR4'
+      : '');
+  const memUnverified = isCustomPart(ram) || isCustomPart(board);
+  if (!ram || !board || !ramType || !boardMemType) {
+    results.push({
+      ruleId: 'RULE-MEM-01',
+      category: 'Memory',
+      title: 'Memory Standard Compatibility',
+      status: 'unknown',
+      unverified: memUnverified,
+      message: `Memory standard incomplete (RAM: ${ramType || 'unknown'}, Board: ${boardMemType || 'unknown'}).`,
+      recommendation: 'Verify DDR4/DDR5 generation on both RAM and Motherboard.',
+    });
+  } else if (ramType.toUpperCase() !== boardMemType.toUpperCase()) {
+    results.push({
+      ruleId: 'RULE-MEM-01',
+      category: 'Memory',
+      title: 'Memory Standard Compatibility',
+      status: 'fail',
+      unverified: memUnverified,
+      message: `${ram.name} (${ramType}) cannot be installed in ${board.name} (${boardMemType}).`,
+      recommendation: `Select ${boardMemType} memory modules.`,
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-MEM-01',
+      category: 'Memory',
+      title: 'Memory Standard Compatibility',
+      status: 'pass',
+      unverified: memUnverified,
+      message: `${ramType} memory standard matches motherboard.`,
+    });
+  }
+
+  // 3. RULE-PSU-01: PSU Wattage & Headroom
+  const psuWatts =
+    Number(psu?.wattage || 0) ||
+    Number((String(psu?.name || '').match(/(\d{3,4})\s*W/i) || [])[1] || 0);
+  const peakWatts = Number(ctx.peakWatts || 0);
+  const recPsuWatts = Number(ctx.recommendedPsuWatts || 0);
+  const psuUnverified = isCustomPart(psu);
+  if (!psu || !psuWatts || !peakWatts) {
+    results.push({
+      ruleId: 'RULE-PSU-01',
+      category: 'Power Supplies',
+      title: 'Power Supply Capacity & Headroom',
+      status: 'unknown',
+      unverified: psuUnverified,
+      message: `PSU wattage (${psuWatts || 'unknown'}W) or system load (${peakWatts || 'unknown'}W) is incomplete.`,
+      recommendation: 'Select a power supply with verified wattage rating.',
+    });
+  } else if (psuWatts < peakWatts) {
+    results.push({
+      ruleId: 'RULE-PSU-01',
+      category: 'Power Supplies',
+      title: 'Power Supply Capacity & Headroom',
+      status: 'fail',
+      unverified: psuUnverified,
+      message: `${psu.name} (${psuWatts}W) is below peak system draw (${peakWatts}W).`,
+      recommendation: `Upgrade to at least a ${recPsuWatts || peakWatts + 120}W power supply.`,
+    });
+  } else if (recPsuWatts && psuWatts < recPsuWatts) {
+    results.push({
+      ruleId: 'RULE-PSU-01',
+      category: 'Power Supplies',
+      title: 'Power Supply Capacity & Headroom',
+      status: 'warn',
+      unverified: psuUnverified,
+      message: `${psu.name} (${psuWatts}W) covers peak draw (${peakWatts}W) but is below recommended ${recPsuWatts}W headroom.`,
+      recommendation: `Consider a ${recPsuWatts}W unit for transient spike margin.`,
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-PSU-01',
+      category: 'Power Supplies',
+      title: 'Power Supply Capacity & Headroom',
+      status: 'pass',
+      unverified: psuUnverified,
+      message: `${psuWatts}W PSU satisfies ${peakWatts}W peak draw and ${recPsuWatts || psuWatts}W target.`,
+    });
+  }
+
+  // 4. RULE-STOR-01: Primary Storage Capacity
+  const minStorageGb = Number(ctx.minStorageGb || 500);
+  let storageGb = Number(storage?.capacity_gb || 0);
+  if (!storageGb && storage) {
+    const combinedStor = `${storage.name || ''} ${storage.capacity || ''} ${storage.specs || ''}`.toUpperCase();
+    const tbM = combinedStor.match(/(\d+)\s*TB/);
+    const gbM = combinedStor.match(/(\d+)\s*GB/);
+    storageGb = tbM ? Number(tbM[1]) * 1000 : gbM ? Number(gbM[1]) : 0;
+  }
+  const storUnverified = isCustomPart(storage);
+  if (!storage || !storageGb) {
+    results.push({
+      ruleId: 'RULE-STOR-01',
+      category: 'Storage',
+      title: 'Primary Storage Baseline',
+      status: 'unknown',
+      unverified: storUnverified,
+      message: 'Primary storage drive or capacity is not specified.',
+      recommendation: `Select an NVMe SSD of at least ${minStorageGb}GB.`,
+    });
+  } else if (storageGb < minStorageGb) {
+    results.push({
+      ruleId: 'RULE-STOR-01',
+      category: 'Storage',
+      title: 'Primary Storage Baseline',
+      status: 'warn',
+      unverified: storUnverified,
+      message: `${storage.name} (${storageGb}GB) is below the ${minStorageGb}GB recommended baseline.`,
+      recommendation: `Step up to a ${minStorageGb}GB or 1TB NVMe SSD.`,
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-STOR-01',
+      category: 'Storage',
+      title: 'Primary Storage Baseline',
+      status: 'pass',
+      unverified: storUnverified,
+      message: `${storageGb}GB storage meets the ${minStorageGb}GB baseline.`,
+    });
+  }
+
+  // 5. RULE-GPU-LEN-01: GPU Length vs Case Max GPU Clearance
+  const gpuLen = inferGpuLengthMm(gpu);
+  const { maxGpuMm, maxCoolerMm } = inferCaseClearance(pcCase);
+  const gpuCaseUnverified = isCustomPart(gpu) || isCustomPart(pcCase);
+  if (!gpu || !pcCase || !gpuLen || !maxGpuMm) {
+    results.push({
+      ruleId: 'RULE-GPU-LEN-01',
+      category: 'Cases',
+      title: 'GPU Length vs. Case Clearance',
+      status: 'unknown',
+      unverified: gpuCaseUnverified,
+      message: `GPU length (${gpuLen || 'unknown'}mm) vs. case max GPU clearance (${maxGpuMm || 'unknown'}mm) is incomplete.`,
+      recommendation: 'Verify GPU length and chassis clearance specifications.',
+    });
+  } else if (gpuLen > maxGpuMm) {
+    results.push({
+      ruleId: 'RULE-GPU-LEN-01',
+      category: 'Cases',
+      title: 'GPU Length vs. Case Clearance',
+      status: 'fail',
+      unverified: gpuCaseUnverified,
+      message: `${gpu.name} (${gpuLen}mm) exceeds ${pcCase.name} max GPU length (${maxGpuMm}mm).`,
+      recommendation: 'Select a longer chassis or shorter dual-fan GPU.',
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-GPU-LEN-01',
+      category: 'Cases',
+      title: 'GPU Length vs. Case Clearance',
+      status: 'pass',
+      unverified: gpuCaseUnverified,
+      message: `GPU length (${gpuLen}mm) fits within case clearance (${maxGpuMm}mm).`,
+    });
+  }
+
+  // 6. RULE-CLR-HGT-01: CPU Cooler Height vs Case Max Cooler Clearance
+  const coolerH = inferCoolerHeightMm(cooler);
+  const clrCaseUnverified = isCustomPart(cooler) || isCustomPart(pcCase);
+  if (!cooler || !pcCase || !coolerH || !maxCoolerMm) {
+    results.push({
+      ruleId: 'RULE-CLR-HGT-01',
+      category: 'CPU Coolers',
+      title: 'CPU Cooler Height vs. Case Clearance',
+      status: 'unknown',
+      unverified: clrCaseUnverified,
+      message: `Cooler height (${coolerH || 'unknown'}mm) vs. case max cooler clearance (${maxCoolerMm || 'unknown'}mm) is incomplete.`,
+      recommendation: 'Verify cooler height against chassis CPU cooler clearance.',
+    });
+  } else if (coolerH > maxCoolerMm) {
+    results.push({
+      ruleId: 'RULE-CLR-HGT-01',
+      category: 'CPU Coolers',
+      title: 'CPU Cooler Height vs. Case Clearance',
+      status: 'fail',
+      unverified: clrCaseUnverified,
+      message: `${cooler.name} (${coolerH}mm) exceeds ${pcCase.name} cooler clearance (${maxCoolerMm}mm).`,
+      recommendation: 'Choose a lower-profile air cooler, AIO liquid cooler, or wider case.',
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-CLR-HGT-01',
+      category: 'CPU Coolers',
+      title: 'CPU Cooler Height vs. Case Clearance',
+      status: 'pass',
+      unverified: clrCaseUnverified,
+      message: `Cooler height (${coolerH}mm) fits within case clearance (${maxCoolerMm}mm).`,
+    });
+  }
+
+  // 7. RULE-MFF-01: Motherboard Form Factor vs Case Supported Form Factors
+  const boardFf = inferBoardFormFactor(board);
+  const caseFfs = inferSupportedFormFactors(pcCase);
+  const mffUnverified = isCustomPart(board) || isCustomPart(pcCase);
+  if (!board || !pcCase || !boardFf || caseFfs.length === 0) {
+    results.push({
+      ruleId: 'RULE-MFF-01',
+      category: 'Cases',
+      title: 'Motherboard & Case Form Factor',
+      status: 'unknown',
+      unverified: mffUnverified,
+      message: `Form factor data missing (Board: ${boardFf || 'unknown'}, Case: ${caseFfs.join(', ') || 'unknown'}).`,
+      recommendation: 'Confirm chassis supports the motherboard form factor.',
+    });
+  } else if (!caseFfs.includes(boardFf)) {
+    results.push({
+      ruleId: 'RULE-MFF-01',
+      category: 'Cases',
+      title: 'Motherboard & Case Form Factor',
+      status: 'fail',
+      unverified: mffUnverified,
+      message: `${board.name} (${boardFf}) does not fit in ${pcCase.name} (supports ${caseFfs.join(', ')}).`,
+      recommendation: `Choose a case supporting ${boardFf} motherboards.`,
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-MFF-01',
+      category: 'Cases',
+      title: 'Motherboard & Case Form Factor',
+      status: 'pass',
+      unverified: mffUnverified,
+      message: `${boardFf} motherboard fits ${pcCase.name} (${caseFfs.join(', ')}).`,
+    });
+  }
+
+  // 8. RULE-SLOTS-01: Motherboard M.2 Slots vs NVMe Storage
+  const m2Slots = inferM2Slots(board);
+  const storIface = String(
+    storage?.storage_interface ||
+      (/NVME|M\.2/i.test(`${storage?.name || ''} ${storage?.specs || ''}`) ? 'M.2 NVMe' : '')
+  ).toUpperCase();
+  const slotUnverified = isCustomPart(board) || isCustomPart(storage);
+  if (!board || !storage || m2Slots === null || !storIface) {
+    results.push({
+      ruleId: 'RULE-SLOTS-01',
+      category: 'Storage',
+      title: 'Motherboard M.2 / Storage Slot Check',
+      status: 'unknown',
+      unverified: slotUnverified,
+      message: 'Motherboard M.2 slot count or storage interface is unknown.',
+      recommendation: 'Verify available M.2 or SATA ports on the motherboard.',
+    });
+  } else if ((storIface.includes('M.2') || storIface.includes('NVME')) && m2Slots < 1) {
+    results.push({
+      ruleId: 'RULE-SLOTS-01',
+      category: 'Storage',
+      title: 'Motherboard M.2 / Storage Slot Check',
+      status: 'fail',
+      unverified: slotUnverified,
+      message: `${storage.name} requires an M.2 slot, but ${board.name} reports 0 M.2 slots.`,
+      recommendation: 'Use a SATA SSD or choose a motherboard with M.2 support.',
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-SLOTS-01',
+      category: 'Storage',
+      title: 'Motherboard M.2 / Storage Slot Check',
+      status: 'pass',
+      unverified: slotUnverified,
+      message: `Motherboard provides ${m2Slots} M.2 slot(s) for ${storage.name}.`,
+    });
+  }
+
+  // 9. RULE-PSU-CONN-01: PSU PCIe / 12VHPWR Connectors vs GPU Requirement
+  const gpuNeeds12v = Boolean(gpu?.gpu_requires_12vhpwr);
+  const gpu8PinReq =
+    gpu?.gpu_pcie_8pin_req !== undefined && gpu?.gpu_pcie_8pin_req !== null
+      ? Number(gpu.gpu_pcie_8pin_req)
+      : gpu && !isCustomPart(gpu)
+      ? 1
+      : null;
+  const psuHas12vKnown = typeof psu?.has_12vhpwr === 'boolean';
+  const psuHas12v = Boolean(psu?.has_12vhpwr);
+  const psu8PinCount =
+    psu?.pcie_8pin_count !== undefined && psu?.pcie_8pin_count !== null
+      ? Number(psu.pcie_8pin_count)
+      : psuWatts >= 750
+      ? 4
+      : psuWatts >= 550
+      ? 2
+      : psuWatts > 0
+      ? 1
+      : null;
+  const connUnverified = isCustomPart(gpu) || isCustomPart(psu);
+
+  if (!gpu || !psu) {
+    results.push({
+      ruleId: 'RULE-PSU-CONN-01',
+      category: 'Power Supplies',
+      title: 'GPU & PSU Power Connectors',
+      status: 'unknown',
+      unverified: connUnverified,
+      message: 'GPU power connector requirements or PSU PCIe cable count is incomplete.',
+      recommendation: 'Verify PSU PCIe 8-pin / 12VHPWR cables match GPU requirements.',
+    });
+  } else if (gpuNeeds12v) {
+    if (!psuHas12vKnown) {
+      results.push({
+        ruleId: 'RULE-PSU-CONN-01',
+        category: 'Power Supplies',
+        title: 'GPU & PSU Power Connectors',
         status: 'unknown',
-        message: `No discrete GPU selected; integrated graphics support for "${cpu.name}" is unknown.`,
-        details: { hasDiscreteGpu: false, hasIgpu: null },
-      };
-    },
-  },
-];
+        unverified: connUnverified,
+        message: `${gpu.name} requires 12VHPWR, but ${psu.name} 12VHPWR support is unknown.`,
+        recommendation: 'Verify PSU supports native 12VHPWR/12V-2x6.',
+      });
+    } else if (!psuHas12v) {
+      results.push({
+        ruleId: 'RULE-PSU-CONN-01',
+        category: 'Power Supplies',
+        title: 'GPU & PSU Power Connectors',
+        status: 'fail',
+        unverified: connUnverified,
+        message: `${gpu.name} requires a native 12VHPWR connector, which ${psu.name} lacks.`,
+        recommendation: 'Select an ATX 3.0/3.1 PSU with native 12VHPWR/12V-2x6 cable.',
+      });
+    } else {
+      results.push({
+        ruleId: 'RULE-PSU-CONN-01',
+        category: 'Power Supplies',
+        title: 'GPU & PSU Power Connectors',
+        status: 'pass',
+        unverified: connUnverified,
+        message: `${psu.name} provides the native 12VHPWR connector required by ${gpu.name}.`,
+      });
+    }
+  } else if (gpu8PinReq === null || psu8PinCount === null) {
+    results.push({
+      ruleId: 'RULE-PSU-CONN-01',
+      category: 'Power Supplies',
+      title: 'GPU & PSU Power Connectors',
+      status: 'unknown',
+      unverified: connUnverified,
+      message: 'GPU power connector requirements or PSU PCIe cable count is incomplete.',
+      recommendation: 'Verify PSU PCIe 8-pin / 12VHPWR cables match GPU requirements.',
+    });
+  } else if (psu8PinCount < gpu8PinReq) {
+    results.push({
+      ruleId: 'RULE-PSU-CONN-01',
+      category: 'Power Supplies',
+      title: 'GPU & PSU Power Connectors',
+      status: 'fail',
+      unverified: connUnverified,
+      message: `${gpu.name} requires ${gpu8PinReq}x 8-pin PCIe connectors, but ${psu.name} provides ${psu8PinCount}.`,
+      recommendation: 'Upgrade to a PSU with sufficient PCIe 8-pin cables.',
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-PSU-CONN-01',
+      category: 'Power Supplies',
+      title: 'GPU & PSU Power Connectors',
+      status: 'pass',
+      unverified: connUnverified,
+      message: 'PSU PCIe power connectors satisfy GPU requirements.',
+    });
+  }
 
-export function evaluateBuildRules(build, context = {}) {
-  const customFlags = getCustomPartFlags(build);
-  return COMPATIBILITY_RULES.map((rule) => {
-    const outcome = rule.check(build, context);
-    const ruleTouchesCustom =
-      customFlags.hasCustomPart &&
-      (!Array.isArray(rule.appliesTo) ||
-        rule.appliesTo.length === 0 ||
-        rule.appliesTo.some((cat) => customFlags.customCategories.includes(cat)));
+  // 10. RULE-CLR-SOCK-01: CPU Cooler Socket Support
+  const coolerSockets = inferCoolerSockets(cooler);
+  const clrSockUnverified = isCustomPart(cooler) || isCustomPart(cpu);
+  if (!cooler || !cpu || !cpuSocket || coolerSockets.length === 0) {
+    results.push({
+      ruleId: 'RULE-CLR-SOCK-01',
+      category: 'CPU Coolers',
+      title: 'CPU Cooler Mounting Compatibility',
+      status: 'unknown',
+      unverified: clrSockUnverified,
+      message: `Cooler socket support (${coolerSockets.join(', ') || 'unknown'}) or CPU socket (${cpuSocket || 'unknown'}) is missing.`,
+      recommendation: 'Confirm mounting bracket support for your CPU socket.',
+    });
+  } else if (!coolerSockets.includes(cpuSocket)) {
+    results.push({
+      ruleId: 'RULE-CLR-SOCK-01',
+      category: 'CPU Coolers',
+      title: 'CPU Cooler Mounting Compatibility',
+      status: 'fail',
+      unverified: clrSockUnverified,
+      message: `${cooler.name} supports ${coolerSockets.join(', ')}, not ${cpuSocket}.`,
+      recommendation: `Select a cooler with ${cpuSocket} mounting hardware.`,
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-CLR-SOCK-01',
+      category: 'CPU Coolers',
+      title: 'CPU Cooler Mounting Compatibility',
+      status: 'pass',
+      unverified: clrSockUnverified,
+      message: `${cooler.name} supports socket ${cpuSocket}.`,
+    });
+  }
 
-    return {
-      ruleId: rule.id,
-      category: rule.category,
-      severity: rule.severity,
-      description: rule.description,
-      status: outcome.status,
-      message: outcome.message,
-      details: outcome.details || {},
-      unverified: Boolean(ruleTouchesCustom),
-    };
-  });
-}
+  // 11. RULE-RAM-LIM-01: RAM Total Capacity & Speed vs Motherboard Max Limits
+  const { maxGb, maxMhz } = inferBoardRamLimits(board);
+  const stickCap =
+    Number(ram?.capacity_gb || 0) ||
+    Number((String(ram?.name || '').match(/(\d+)\s*GB/i) || [])[1] || 0);
+  const ramSticks = Number(ctx.ramStickCount || 1);
+  const totalRamGb = stickCap * ramSticks;
+  const ramMhz =
+    Number(ram?.speed_mhz || 0) ||
+    Number((String(ram?.name || '').match(/(\d{4})\s*MHZ/i) || [])[1] || 0);
+  const ramLimUnverified = isCustomPart(ram) || isCustomPart(board);
 
-export function summarizeBalance(build) {
-  return evaluateBottleneckBalance(build?.Processors, build?.['Video Cards']);
-}
+  if (!ram || !board || (!maxGb && !maxMhz) || (!totalRamGb && !ramMhz)) {
+    results.push({
+      ruleId: 'RULE-RAM-LIM-01',
+      category: 'Memory',
+      title: 'Motherboard RAM Capacity & Speed Limits',
+      status: 'unknown',
+      unverified: ramLimUnverified,
+      message: 'Motherboard max RAM capacity and speed limits are not specified.',
+      recommendation: 'Check motherboard QVL/specs for supported memory capacity and frequency.',
+    });
+  } else if ((maxGb && totalRamGb > maxGb) || (maxMhz && ramMhz > maxMhz)) {
+    results.push({
+      ruleId: 'RULE-RAM-LIM-01',
+      category: 'Memory',
+      title: 'Motherboard RAM Capacity & Speed Limits',
+      status: 'fail',
+      unverified: ramLimUnverified,
+      message: `Memory (${totalRamGb}GB @ ${ramMhz || '?'}MHz) exceeds motherboard limit (${maxGb || '?'}GB / ${maxMhz || '?'}MHz).`,
+      recommendation: 'Reduce module capacity/count or pick a higher-rated memory kit/board.',
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-RAM-LIM-01',
+      category: 'Memory',
+      title: 'Motherboard RAM Capacity & Speed Limits',
+      status: 'pass',
+      unverified: ramLimUnverified,
+      message: `RAM configuration (${totalRamGb}GB) is within motherboard limits (${maxGb}GB max).`,
+    });
+  }
 
-export function getTierSummary(item, category) {
-  return deriveComponentTier(item, category);
+  // 12. RULE-IGPU-01: Integrated Graphics / Display Output Check
+  const hasIgpu = inferHasIgpu(cpu);
+  const igpuUnverified = isCustomPart(cpu);
+  if (!cpu || hasIgpu === null) {
+    results.push({
+      ruleId: 'RULE-IGPU-01',
+      category: 'Processors',
+      title: 'Integrated Graphics Availability',
+      status: 'unknown',
+      unverified: igpuUnverified,
+      message: 'Processor integrated graphics availability is unknown.',
+      recommendation: 'Ensure either an iGPU or dedicated graphics card is present for display output.',
+    });
+  } else if (!hasIgpu) {
+    results.push({
+      ruleId: 'RULE-IGPU-01',
+      category: 'Processors',
+      title: 'Integrated Graphics Availability',
+      status: gpu ? 'pass' : 'fail',
+      unverified: igpuUnverified,
+      message: gpu
+        ? `${cpu.name} has no iGPU; display output is handled by ${gpu.name}.`
+        : `${cpu.name} has no integrated graphics and no dedicated GPU is selected.`,
+      recommendation: gpu
+        ? 'Connect monitor cable directly to the dedicated graphics card.'
+        : 'Add a dedicated graphics card or choose an APU/CPU with integrated graphics.',
+    });
+  } else {
+    results.push({
+      ruleId: 'RULE-IGPU-01',
+      category: 'Processors',
+      title: 'Integrated Graphics Availability',
+      status: 'pass',
+      unverified: igpuUnverified,
+      message: `${cpu.name} includes integrated graphics.`,
+    });
+  }
+
+  return results;
 }

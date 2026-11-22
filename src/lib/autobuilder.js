@@ -2,12 +2,7 @@ import { CATEGORIES, WORKLOAD_WEIGHTS } from './config.js';
 import { calculateBuildTotal, getEffectiveItemPrice } from './pricing.js';
 import { calculateRigWattage, getPsuProfile } from './power.js';
 import { deriveComponentTier } from './scoring.js';
-import {
-  detectCpuSocket,
-  detectMotherboardSocket,
-  detectMemoryType,
-  parseStorageProfile,
-} from './compat.js';
+import { detectCpuSocket, detectMotherboardSocket } from './compat.js';
 
 const TRIM_PRIORITY = [
   'Video Cards',
@@ -15,10 +10,58 @@ const TRIM_PRIORITY = [
   'Storage',
   'Memory',
   'Motherboards',
-  'Power Supplies',
   'Cases',
   'CPU Coolers',
+  'Power Supplies',
 ];
+
+const AVOID_PSU_PATTERN =
+  /\b(INPLAY|YGT|RAKK|OVATION|KEYTECH|BOSSTON|FORTRESS|INTELLIGENT|GENERIC|NEUTRON|CVS|KOREAN|TRUE\s*RATED)\b/i;
+
+function isGenericOrAvoidPsu(part) {
+  if (!part) return false;
+  const combined = `${part.brand || ''} ${part.name || ''} ${part.specs || ''}`;
+  const prof = getPsuProfile(part);
+  if (prof.tierRank <= 2) return true;
+  return AVOID_PSU_PATTERN.test(combined);
+}
+
+function detectMemoryType(part) {
+  if (!part) return '';
+  if (part.memory_type) return String(part.memory_type).trim().toUpperCase();
+  const combined = `${part.name || ''} ${part.specs || ''}`.toUpperCase();
+  if (combined.includes('DDR5')) return 'DDR5';
+  if (combined.includes('DDR4')) return 'DDR4';
+  const sock = detectMotherboardSocket(part);
+  if (sock === 'AM5') return 'DDR5';
+  if (sock === 'AM4') return 'DDR4';
+  return '';
+}
+
+function parseStorageProfile(part) {
+  if (!part) return { capacityGB: 0, isHdd: false, isNvme: false };
+  const combined = `${part.name || ''} ${part.capacity || ''} ${part.storage_interface || ''} ${part.interface_type || ''} ${part.specs || ''}`.toUpperCase();
+
+  let capacityGB =
+    part.capacity_gb !== undefined && part.capacity_gb !== null && part.capacity_gb !== ''
+      ? Number(part.capacity_gb)
+      : 0;
+
+  if (!capacityGB) {
+    const tbMatch = combined.match(/(\d+(?:\.\d+)?)\s*TB/);
+    const gbMatch = combined.match(/(\d+)\s*GB/);
+    if (tbMatch) capacityGB = Math.round(Number(tbMatch[1]) * 1000);
+    else if (gbMatch) capacityGB = Number(gbMatch[1]);
+  }
+
+  const isNvme = combined.includes('NVME') || combined.includes('M.2');
+  const isHdd =
+    !isNvme &&
+    !combined.includes('SSD') &&
+    (combined.includes('HDD') || combined.includes('HARD DRIVE') || combined.includes('RPM'));
+
+  return { capacityGB, isHdd, isNvme };
+}
 
 export function runSmartBuildAssistant({
   products = [],
@@ -68,7 +111,7 @@ export function runSmartBuildAssistant({
     board: (rawWeights.Motherboards ?? 13) / 100,
     ram: (rawWeights.Memory ?? 9) / 100,
     storage: (rawWeights.Storage ?? 11) / 100,
-    psu: (rawWeights['Power Supplies'] ?? 7) / 100,
+    psu: Math.max((rawWeights['Power Supplies'] ?? 8) / 100, 0.08),
     cooler: (rawWeights['CPU Coolers'] ?? 3) / 100,
     case: (rawWeights.Cases ?? 3) / 100,
   };
@@ -118,6 +161,18 @@ export function runSmartBuildAssistant({
   const otherPartsCost = (b, excludeCat) =>
     CATEGORIES.reduce((sum, cat) => (cat === excludeCat ? sum : sum + itemCost(cat, b[cat])), 0);
 
+  const getPsuRequirements = (partsObj) => {
+    const powerSummary = calculateRigWattage(partsObj, targetSticks, overclockEnabled);
+    const minSafeWatts = powerSummary.recommendedPsuWatts;
+    const cpuTier = deriveComponentTier(partsObj.Processors, 'Processors') || 2;
+    const gpuTier = deriveComponentTier(partsObj['Video Cards'], 'Video Cards') || 2;
+    const hasDiscreteGpu = Boolean(partsObj['Video Cards']);
+    const isHeavyRig =
+      gpuTier >= 4 || cpuTier >= 4 || minSafeWatts >= 550 || budget >= 50000;
+    const minRank = isHeavyRig ? 4 : hasDiscreteGpu || budget >= 30000 ? 3 : 2;
+    return { minSafeWatts, minRank, hasDiscreteGpu, isHeavyRig };
+  };
+
   const getMinimumSafePsu = (
     cpuPart,
     gpuPart,
@@ -129,33 +184,55 @@ export function runSmartBuildAssistant({
     maxPsuBudget = Infinity
   ) => {
     if (!psus.length) return null;
-    const powerSummary = calculateRigWattage(
-      {
-        Processors: cpuPart,
-        'Video Cards': gpuPart,
-        Motherboards: boardPart,
-        Memory: ramPart,
-        Storage: storagePart,
-        'CPU Coolers': coolerPart,
-        Cases: casePart,
-      },
-      targetSticks,
-      overclockEnabled
+    const { minSafeWatts, minRank, hasDiscreteGpu } = getPsuRequirements({
+      Processors: cpuPart,
+      'Video Cards': gpuPart,
+      Motherboards: boardPart,
+      Memory: ramPart,
+      Storage: storagePart,
+      'CPU Coolers': coolerPart,
+      Cases: casePart,
+    });
+
+    const targetPsuBudget = Math.min(
+      maxPsuBudget,
+      Math.max(budget * weights.psu, hasDiscreteGpu ? 2600 : 1800)
     );
-    const minSafeWatts = powerSummary.recommendedPsuWatts;
-    const cpuTier = deriveComponentTier(cpuPart, 'Processors') || 2;
-    const gpuTier = deriveComponentTier(gpuPart, 'Video Cards') || 2;
-    const minRank = gpuTier >= 5 || cpuTier >= 5 ? 4 : 3;
 
     const withinBudget = psus.filter((p) => itemCost('Power Supplies', p) <= maxPsuBudget);
     const candidatePool = withinBudget.length > 0 ? withinBudget : psus;
 
-    const qualified = candidatePool.filter((p) => {
+    const reliablePool = candidatePool.filter((p) => !isGenericOrAvoidPsu(p));
+    const activePool = reliablePool.length > 0 ? reliablePool : candidatePool;
+
+    const rankPsus = (list) =>
+      [...list].sort((a, b) => {
+        const profA = getPsuProfile(a);
+        const profB = getPsuProfile(b);
+        if (profB.tierRank !== profA.tierRank) return profB.tierRank - profA.tierRank;
+        const scoreDiff = Number(b.hardware_score || 0) - Number(a.hardware_score || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return itemCost('Power Supplies', a) - itemCost('Power Supplies', b);
+      });
+
+    const qualified = activePool.filter((p) => {
       const prof = getPsuProfile(p);
       return (prof.watts || 0) >= minSafeWatts && prof.tierRank >= minRank;
     });
-    const fallback = candidatePool.filter((p) => (getPsuProfile(p).watts || 0) >= minSafeWatts);
-    return qualified[0] || fallback[0] || candidatePool[0] || null;
+
+    if (qualified.length > 0) {
+      const withinTarget = qualified.filter(
+        (p) => itemCost('Power Supplies', p) <= targetPsuBudget
+      );
+      return rankPsus(withinTarget.length > 0 ? withinTarget : qualified)[0];
+    }
+
+    const wattSafe = activePool.filter((p) => (getPsuProfile(p).watts || 0) >= minSafeWatts);
+    if (wattSafe.length > 0) {
+      return rankPsus(wattSafe)[0];
+    }
+
+    return rankPsus(activePool)[0] || candidatePool[0] || null;
   };
 
   const buildObj = {
@@ -194,12 +271,12 @@ export function runSmartBuildAssistant({
 
   const upgradePriority =
     profile === 'Gaming'
-      ? ['Video Cards', 'Processors', 'Memory', 'Storage', 'Power Supplies', 'Motherboards', 'CPU Coolers', 'Cases']
+      ? ['Video Cards', 'Processors', 'Power Supplies', 'Memory', 'Storage', 'Motherboards', 'CPU Coolers', 'Cases']
       : profile === 'Content Creation'
-      ? ['Processors', 'Video Cards', 'Memory', 'Storage', 'Motherboards', 'Power Supplies', 'CPU Coolers', 'Cases']
+      ? ['Processors', 'Video Cards', 'Power Supplies', 'Memory', 'Storage', 'Motherboards', 'CPU Coolers', 'Cases']
       : isOfficeApu
-      ? ['Processors', 'Storage', 'Memory', 'Motherboards', 'Power Supplies', 'Cases', 'CPU Coolers']
-      : ['Video Cards', 'Processors', 'Storage', 'Memory', 'Motherboards', 'Power Supplies', 'CPU Coolers', 'Cases'];
+      ? ['Processors', 'Storage', 'Memory', 'Power Supplies', 'Motherboards', 'Cases', 'CPU Coolers']
+      : ['Video Cards', 'Processors', 'Power Supplies', 'Storage', 'Memory', 'Motherboards', 'CPU Coolers', 'Cases'];
 
   let improved = true;
   let steps = 0;
@@ -230,11 +307,27 @@ export function runSmartBuildAssistant({
             return false;
           }
         }
+        if (cat === 'Power Supplies') {
+          if (isGenericOrAvoidPsu(candidate)) return false;
+          const currentProf = getPsuProfile(buildObj['Power Supplies']);
+          const candProf = getPsuProfile(candidate);
+          if (candProf.tierRank < currentProf.tierRank) return false;
+        }
         return true;
       });
 
       if (betterOptions.length > 0) {
-        betterOptions.sort((a, b) => itemCost(cat, b) - itemCost(cat, a));
+        if (cat === 'Power Supplies') {
+          betterOptions.sort((a, b) => {
+            const profA = getPsuProfile(a);
+            const profB = getPsuProfile(b);
+            if (profB.tierRank !== profA.tierRank) return profB.tierRank - profA.tierRank;
+            return itemCost(cat, a) - itemCost(cat, b);
+          });
+        } else {
+          betterOptions.sort((a, b) => itemCost(cat, b) - itemCost(cat, a));
+        }
+
         const trial = { ...buildObj, [cat]: betterOptions[0] };
 
         if (cat === 'Processors' || cat === 'Video Cards') {
@@ -249,7 +342,14 @@ export function runSmartBuildAssistant({
             trial.Cases,
             psuCap
           );
-          if (reqPsu && (getPsuProfile(trial['Power Supplies']).watts || 0) < (getPsuProfile(reqPsu).watts || 0)) {
+          const currentPsuProf = getPsuProfile(trial['Power Supplies']);
+          const reqPsuProf = reqPsu ? getPsuProfile(reqPsu) : null;
+          if (
+            reqPsu &&
+            ((currentPsuProf.watts || 0) < (reqPsuProf.watts || 0) ||
+              (currentPsuProf.tierRank || 0) < (reqPsuProf.tierRank || 0) ||
+              isGenericOrAvoidPsu(trial['Power Supplies']))
+          ) {
             trial['Power Supplies'] = reqPsu;
           }
         }
@@ -262,7 +362,18 @@ export function runSmartBuildAssistant({
     }
   }
 
-  // Ceiling enforcement pass: step down to lower-cost options when over budget
+  // Ceiling enforcement pass: step down lower-cost options without sacrificing PSU safety
+  const isSafeTrimCandidate = (cat, item) => {
+    if (cat !== 'Power Supplies') return true;
+    const { minSafeWatts, minRank } = getPsuRequirements(buildObj);
+    const prof = getPsuProfile(item);
+    return (
+      !isGenericOrAvoidPsu(item) &&
+      (prof.watts || 0) >= minSafeWatts &&
+      prof.tierRank >= minRank
+    );
+  };
+
   let trimmed = true;
   let trimSteps = 0;
   while (trimmed && trimSteps < 40 && calculateBuildTotal(buildObj, CATEGORIES, targetSticks) > budget) {
@@ -276,7 +387,12 @@ export function runSmartBuildAssistant({
       const allowedCap = budget - otherPartsCost(buildObj, cat);
 
       const withinCapCheaper = pool
-        .filter((item) => itemCost(cat, item) < currentCost && itemCost(cat, item) <= allowedCap)
+        .filter(
+          (item) =>
+            itemCost(cat, item) < currentCost &&
+            itemCost(cat, item) <= allowedCap &&
+            isSafeTrimCandidate(cat, item)
+        )
         .sort((a, b) => itemCost(cat, b) - itemCost(cat, a));
 
       if (withinCapCheaper.length > 0) {
@@ -286,7 +402,7 @@ export function runSmartBuildAssistant({
       }
 
       const anyCheaper = pool
-        .filter((item) => itemCost(cat, item) < currentCost)
+        .filter((item) => itemCost(cat, item) < currentCost && isSafeTrimCandidate(cat, item))
         .sort((a, b) => itemCost(cat, b) - itemCost(cat, a));
 
       if (anyCheaper.length > 0) {
@@ -309,7 +425,7 @@ export function runSmartBuildAssistant({
     totalPrice,
     budget,
     statusMessage: withinBudget
-      ? `Recommended Build (${profile} · ${targetSocket} · ${targetSticks}x RAM · PSU Tier ${psuInfo.tier}) — Total: ₱${totalPrice.toLocaleString()} / Budget: ₱${budget.toLocaleString()}`
-      : `Closest Build (${profile} · ${targetSocket} · ${targetSticks}x RAM · PSU Tier ${psuInfo.tier}) — Total: ₱${totalPrice.toLocaleString()} exceeds ₱${budget.toLocaleString()} budget`,
+      ? `Recommended Build (${profile} · ${targetSocket} · ${targetSticks}x RAM · PSU Tier ${psuInfo.tier}) | Total: ₱${totalPrice.toLocaleString()} / Budget: ₱${budget.toLocaleString()}`
+      : `Closest Build (${profile} · ${targetSocket} · ${targetSticks}x RAM · PSU Tier ${psuInfo.tier}) | Total: ₱${totalPrice.toLocaleString()} exceeds ₱${budget.toLocaleString()} budget`,
   };
 }
