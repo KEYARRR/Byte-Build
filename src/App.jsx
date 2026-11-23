@@ -7,16 +7,56 @@ import { calculateBuildTotal, getEffectiveItemPrice, isPrebundledKit } from './l
 import { calculateRigWattage, getPsuProfile } from './lib/power.js';
 import {
   calculateCompatibilityScore,
-  deriveComponentTier,
   evaluateBottleneckBalance,
+  getVerificationCoverage,
 } from './lib/scoring.js';
 import {
   evaluateBuildRules,
-  getCustomPartFlags,
   detectCpuSocket,
   detectMotherboardSocket,
 } from './lib/compat.js';
+import { parseRam } from './lib/ram.js';
 import { runSmartBuildAssistant } from './lib/autobuilder.js';
+import { matchOcrTextToCatalog, applyInStockOcrMatches } from './lib/ocr.js';
+import {
+  detectPartFormFactor,
+  getBrandsForCategory,
+  getFormFactorsForCategory,
+  getCategoryCounts,
+  filterAndSortCatalogProducts,
+} from './lib/catalog.js';
+import {
+  buildQuotationPayload,
+  buildQuotationHtmlDocument,
+} from './lib/quotation.js';
+import {
+  normalizeSavedBuildRecord,
+  validatePreorderInput,
+  buildPreorderRequestPayload,
+} from './lib/orders.js';
+import {
+  buildAdminInsertPayload,
+  buildAdminUpdatePayload,
+  filterAdminRecords,
+  normalizeDssRules,
+} from './lib/admin.js';
+import {
+  createCustomOwnedPart,
+  isCustomPartItem,
+  getCustomBuildSummary,
+  buildLearnMoreUrl,
+  getItemDisplayStatus,
+} from './lib/customParts.js';
+import {
+  buildDiagnosticIssues,
+  buildSystemRecommendation,
+  evaluatePerformanceTier,
+} from './lib/diagnostics.js';
+import {
+  buildSlotManifestRows,
+  computePowerDisplayMetrics,
+} from './lib/buildSummary.js';
+import { getRuleChipMeta } from './lib/ruleDisplay.js';
 
 const ACTIVE_TABLE = 'bytebuild_current_inventory';
 const PREORDER_TABLE = 'bytebuild_preorder_inventory';
@@ -45,65 +85,6 @@ const DEFAULT_DSS_RULES = {
   creatorCpuWeight: WORKLOAD_WEIGHTS?.['Content Creation']?.Processors ?? 27,
 };
 
-const RULE_DISPLAY_META = {
-  'RULE-SOCK-01': {
-    shortLabel: 'CPU Socket',
-    whyItMatters: 'Ensures the processor physically fits and communicates with the motherboard.',
-  },
-  'RULE-MEM-01': {
-    shortLabel: 'RAM Generation',
-    whyItMatters: 'Confirms DDR4 or DDR5 memory sticks match the motherboard slots.',
-  },
-  'RULE-PSU-01': {
-    shortLabel: 'Power Headroom',
-    whyItMatters: 'Verifies the power supply handles peak load and transient power spikes safely.',
-  },
-  'RULE-STOR-01': {
-    shortLabel: 'Storage Baseline',
-    whyItMatters: 'Checks that primary storage has enough capacity for the OS, apps, and games.',
-  },
-  'RULE-GPU-LEN-01': {
-    shortLabel: 'GPU Clearance',
-    whyItMatters: 'Confirms the graphics card length fits inside the PC case without blocking fans.',
-  },
-  'RULE-CLR-HGT-01': {
-    shortLabel: 'Cooler Height',
-    whyItMatters: 'Ensures the CPU cooler clears the case side panel.',
-  },
-  'RULE-MFF-01': {
-    shortLabel: 'Case Form Factor',
-    whyItMatters: 'Verifies the motherboard size (ATX, mATX, ITX) mounts properly in the case.',
-  },
-  'RULE-SLOTS-01': {
-    shortLabel: 'M.2 Drive Slots',
-    whyItMatters: 'Confirms the motherboard has an available M.2 slot for NVMe SSDs.',
-  },
-  'RULE-PSU-CONN-01': {
-    shortLabel: 'GPU Power Cables',
-    whyItMatters: 'Checks that the power supply has the right PCIe 8-pin or 12VHPWR cables.',
-  },
-  'RULE-CLR-SOCK-01': {
-    shortLabel: 'Cooler Bracket',
-    whyItMatters: 'Verifies the cooler includes mounting hardware for the chosen CPU socket.',
-  },
-  'RULE-RAM-LIM-01': {
-    shortLabel: 'RAM Capacity & Speed',
-    whyItMatters: 'Ensures total memory size and speed stay within motherboard limits.',
-  },
-  'RULE-IGPU-01': {
-    shortLabel: 'Display Output',
-    whyItMatters: 'Confirms the system has either integrated graphics or a dedicated GPU for video.',
-  },
-};
-
-const getStatusBadgeLabel = (status, unverified = false) => {
-  if (unverified) return 'Unverified';
-  if (status === 'pass') return 'Verified';
-  if (status === 'fail') return 'Conflict';
-  if (status === 'warn') return 'Advisory';
-  return 'Needs Spec Check';
-};
-
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
 
 const peso = (value) =>
@@ -118,24 +99,6 @@ const getCategoryLabel = (category) => {
   return category;
 };
 
-const buildLearnMoreUrl = (item) => {
-  if (!item) return null;
-  if (item.specs_url && /^https?:\/\//i.test(item.specs_url)) {
-    return item.specs_url;
-  }
-  const query = encodeURIComponent(`${item.name || ''} ${item.category || ''} specifications`);
-  return `https://www.google.com/search?q=${query}`;
-};
-
-const detectPartFormFactor = (part) => {
-  const raw = `${part?.form_factor || ''} ${part?.name || ''} ${part?.specs || ''}`.toUpperCase();
-  if (raw.includes('MINI-ITX') || raw.includes('ITX')) return 'Mini-ITX';
-  if (raw.includes('MICRO-ATX') || raw.includes('M-ATX') || raw.includes('MATX')) return 'Micro-ATX';
-  if (raw.includes('E-ATX') || raw.includes('EATX')) return 'E-ATX';
-  if (raw.includes('ATX')) return 'ATX';
-  return 'Standard';
-};
-
 const getRamSummary = (part, stickCount = 2) => {
   if (!part) {
     return {
@@ -146,26 +109,12 @@ const getRamSummary = (part, stickCount = 2) => {
       totalPrice: 0,
     };
   }
-  const combined = `${part.name || ''} ${part.capacity || ''} ${part.specs || ''}`.toUpperCase();
-  const packMatch = combined.match(/(\d+)\s*[X×]\s*(\d+)\s*GB/);
-  const capMatch = combined.match(/(\d+(?:\.\d+)?)\s*GB/);
-  const isKit = isPrebundledKit(part);
-  const perStickCapacity = packMatch
-    ? Number(packMatch[2])
-    : capMatch
-    ? Number(capMatch[1])
-    : 0;
-  const effectiveSticks = isKit
-    ? packMatch
-      ? Number(packMatch[1])
-      : Math.max(2, Number(stickCount) || 2)
-    : Math.max(1, Number(stickCount) || 1);
-
+  const parsed = parseRam(part, stickCount);
   return {
-    stickCount: effectiveSticks,
-    perStickCapacity,
-    totalCapacity: perStickCapacity * effectiveSticks,
-    isKit,
+    stickCount: parsed.stickCount,
+    perStickCapacity: parsed.perStickCapacity,
+    totalCapacity: parsed.totalCapacity,
+    isKit: parsed.isKit,
     totalPrice: getEffectiveItemPrice('Memory', part, stickCount),
   };
 };
@@ -285,11 +234,9 @@ export default function App() {
 
   const [realtimeConnected, setRealtimeConnected] = useState(false);
 
-  // Build Focus Mode & Collapsed Unknown Rules
   const [buildFocused, setBuildFocused] = useState(false);
   const [showUnknownRules, setShowUnknownRules] = useState(false);
 
-  // Search & Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBrand, setSelectedBrand] = useState('All');
   const [selectedFormFactor, setSelectedFormFactor] = useState('All');
@@ -298,18 +245,16 @@ export default function App() {
   const [sortBy, setSortBy] = useState('price-asc');
   const [showSoldOut, setShowSoldOut] = useState(false);
 
-  // Power & Auto-Builder States
   const [overclockEnabled, setOverclockEnabled] = useState(false);
   const [powerDisplayView, setPowerDisplayView] = useState('load');
   const [assistantBudget, setAssistantBudget] = useState(40000);
   const [assistantProfile, setAssistantProfile] = useState('Gaming');
   const [assistantStatus, setAssistantStatus] = useState('');
 
-  // Dynamic Rule-Based DSS Parameters
   const [dssRules, setDssRules] = useState(() => {
     try {
       const saved = localStorage.getItem('bytebuild_dss_rules');
-      return saved ? { ...DEFAULT_DSS_RULES, ...JSON.parse(saved) } : DEFAULT_DSS_RULES;
+      return normalizeDssRules(saved ? JSON.parse(saved) : {}, DEFAULT_DSS_RULES);
     } catch {
       return DEFAULT_DSS_RULES;
     }
@@ -324,7 +269,6 @@ export default function App() {
   const [existingRamCount, setExistingRamCount] = useState(2);
   const [selectedRamCount, setSelectedRamCount] = useState(2);
 
-  // Custom Part Modal State (used in Upgrade section for unlisted owned parts)
   const [customModalOpen, setCustomModalOpen] = useState(false);
   const [customPartForm, setCustomPartForm] = useState({
     category: 'Processors',
@@ -339,14 +283,12 @@ export default function App() {
     specs_url: '',
   });
 
-  // Paper Spec Sheet Scanner State (tesseract.js)
   const [ocrText, setOcrText] = useState('');
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState('');
   const [ocrScanResults, setOcrScanResults] = useState([]);
   const [showRawOcrText, setShowRawOcrText] = useState(false);
 
-  // Centered Focus & Rationale/Compare Panel State
   const focusViewRef = useRef(null);
   const [compareCategory, setCompareCategory] = useState('Video Cards');
   const [selectedRuleId, setSelectedRuleId] = useState(null);
@@ -356,7 +298,6 @@ export default function App() {
     new Date().toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' })
   );
 
-  // Authentication & Password Recovery State
   const [currentUser, setCurrentUser] = useState(null);
   const [authMode, setAuthMode] = useState('login');
   const [authEmail, setAuthEmail] = useState('');
@@ -366,12 +307,10 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [forgotEmailSent, setForgotEmailSent] = useState(false);
 
-  // Saved Builds & Quotation Export State
   const [savedBuilds, setSavedBuilds] = useState([]);
   const [savingBuild, setSavingBuild] = useState(false);
   const [exportingQuote, setExportingQuote] = useState(false);
 
-  // Pre-Order Workflow State
   const [preorderModalItem, setPreorderModalItem] = useState(null);
   const [userPreorders, setUserPreorders] = useState([]);
   const [preorderForm, setPreorderForm] = useState({
@@ -381,7 +320,6 @@ export default function App() {
   });
   const [preorderSubmitting, setPreorderSubmitting] = useState(false);
 
-  // Administrator Console States
   const [, setLogoTapCount] = useState(0);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
@@ -803,25 +741,7 @@ export default function App() {
         : ACTIVE_TABLE;
 
     try {
-      const payload = {
-        name: newItemForm.name.trim(),
-        brand: newItemForm.brand.trim() || 'OEM',
-        category: newItemForm.category,
-        socket: newItemForm.socket.trim() || null,
-        memory_type: newItemForm.memory_type.trim() || null,
-        form_factor: newItemForm.form_factor.trim() || null,
-        psu_tier: newItemForm.psu_tier.trim() || null,
-        hardware_score: Number(newItemForm.hardware_score) || 75,
-        specs: newItemForm.specs.trim() || 'Standard specification',
-      };
-
-      if (targetType !== 'reference') {
-        payload.price = Number(newItemForm.price) || 0;
-        payload.stock_status =
-          adminTableSource === 'preorder' ? 'Pre-Order' : newItemForm.stock_status;
-      } else {
-        payload.source_type = 'reference';
-      }
+      const payload = buildAdminInsertPayload(newItemForm, targetType, tableName);
 
       const { error } = await supabase.from(tableName).insert([payload]);
       if (error) throw error;
@@ -862,22 +782,7 @@ export default function App() {
         : ACTIVE_TABLE);
 
     try {
-      const updates = {
-        name: editingItem.name,
-        brand: editingItem.brand,
-        category: editingItem.category,
-        socket: editingItem.socket || null,
-        memory_type: editingItem.memory_type || null,
-        form_factor: editingItem.form_factor || null,
-        psu_tier: editingItem.psu_tier || null,
-        hardware_score: Number(editingItem.hardware_score || 75),
-        specs: editingItem.specs || '',
-      };
-
-      if (tableName !== REFERENCE_TABLE) {
-        updates.price = Number(editingItem.price || 0);
-        updates.stock_status = editingItem.stock_status || 'In Stock';
-      }
+      const updates = buildAdminUpdatePayload(editingItem, tableName === REFERENCE_TABLE);
 
       const { error } = await supabase
         .from(tableName)
@@ -934,49 +839,24 @@ export default function App() {
 
   const handleSaveDssRules = (e) => {
     e.preventDefault();
-    localStorage.setItem('bytebuild_dss_rules', JSON.stringify(dssRules));
+    const normalized = normalizeDssRules(dssRules, DEFAULT_DSS_RULES);
+    setDssRules(normalized);
+    localStorage.setItem('bytebuild_dss_rules', JSON.stringify(normalized));
     alert('Compatibility & Recommendation Engine rules updated and applied across the system.');
   };
 
-  // Adds unlisted owned hardware into Your Current Rig (Upgrade section)
   const handleAddCustomPart = (e) => {
     e.preventDefault();
-    const trimmedName = customPartForm.name.trim();
-    if (!trimmedName) return;
-
-    const hasSpecs = Boolean(
-      customPartForm.socket.trim() ||
-        customPartForm.memory_type.trim() ||
-        customPartForm.form_factor.trim() ||
-        customPartForm.wattage ||
-        customPartForm.specs.trim()
-    );
-
-    const customItem = {
-      id: `custom-${Date.now()}`,
-      name: trimmedName,
-      brand: customPartForm.brand.trim() || 'Custom',
-      category: customPartForm.category,
-      price: Number(customPartForm.price) || 0,
-      socket: customPartForm.socket.trim() || null,
-      memory_type: customPartForm.memory_type.trim() || null,
-      form_factor: customPartForm.form_factor.trim() || null,
-      wattage: Number(customPartForm.wattage) || 0,
-      specs: customPartForm.specs.trim() || '',
-      specs_url: customPartForm.specs_url.trim() || null,
-      stock_status: 'Owned (Custom)',
-      source_type: 'reference',
-      isCustomInput: true,
-      unverified: !hasSpecs,
-    };
+    const customItem = createCustomOwnedPart(customPartForm);
+    if (!customItem) return;
 
     setExistingPc((prev) => ({
       ...prev,
-      [customPartForm.category]: customItem,
+      [customItem.category]: customItem,
     }));
     setCustomModalOpen(false);
     setCustomPartForm({
-      category: customPartForm.category,
+      category: customItem.category,
       name: '',
       brand: 'Custom',
       price: '',
@@ -994,7 +874,6 @@ export default function App() {
     [activeProducts, preorderProducts, referenceParts]
   );
 
-  // Scans a photo of a paper spec sheet and cross-checks each line against shop inventory
   const handleOcrScanImage = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1003,17 +882,6 @@ export default function App() {
     setOcrError('');
     setOcrScanResults([]);
 
-    const STOP_WORDS = new Set([
-      'cpu', 'gpu', 'ram', 'ssd', 'hdd', 'psu', 'case', 'mobo', 'motherboard',
-      'processor', 'memory', 'storage', 'cooler', 'power', 'supply', 'video',
-      'card', 'pcs', 'php', 'with', 'for', 'the', 'and', 'specs', 'build',
-    ]);
-
-    const shopPool = [
-      ...activeProducts.map((p) => ({ ...p, _source: 'active' })),
-      ...preorderProducts.map((p) => ({ ...p, _source: 'preorder' })),
-    ];
-
     let worker;
     try {
       worker = await createWorker('eng');
@@ -1021,51 +889,7 @@ export default function App() {
       const rawText = (data?.text || '').trim();
       setOcrText(rawText);
 
-      const lines = rawText
-        .split('\n')
-        .map((line) => line.replace(/^[\s\-•*0-9.)]+/, '').trim())
-        .filter((line) => line.length >= 4);
-
-      const results = lines.map((line) => {
-        const tokens = line
-          .toLowerCase()
-          .split(/[^a-z0-9]+/)
-          .filter((tok) => tok.length >= 2 && !STOP_WORDS.has(tok));
-
-        if (tokens.length === 0) {
-          return { rawLine: line, status: 'Unavailable', matchedPart: null };
-        }
-
-        const scored = shopPool
-          .map((item) => {
-            const hay = `${item.name || ''} ${item.brand || ''} ${item.sku_code || ''} ${item.specs || ''}`.toLowerCase();
-            const hits = tokens.reduce((count, tok) => (hay.includes(tok) ? count + 1 : count), 0);
-            const exactModelBonus = tokens.some((tok) => /\d{3,4}/.test(tok) && hay.includes(tok)) ? 1 : 0;
-            return { item, hits, score: hits + exactModelBonus };
-          })
-          .filter((entry) => entry.hits >= Math.min(2, tokens.length))
-          .sort((a, b) => {
-            if (b.score !== a.score) return b.score - a.score;
-            const aInStock = a.item._source === 'active' && a.item.stock_status !== 'Sold Out' ? 1 : 0;
-            const bInStock = b.item._source === 'active' && b.item.stock_status !== 'Sold Out' ? 1 : 0;
-            return bInStock - aInStock;
-          });
-
-        const best = scored[0]?.item || null;
-        if (!best) {
-          return { rawLine: line, status: 'Unavailable', matchedPart: null };
-        }
-
-        const status =
-          best._source === 'preorder' || best.stock_status === 'Pre-Order'
-            ? 'Pre-Order'
-            : best.stock_status === 'Sold Out'
-            ? 'Sold Out'
-            : 'In Stock';
-
-        return { rawLine: line, status, matchedPart: best };
-      });
-
+      const results = matchOcrTextToCatalog(rawText, activeProducts, preorderProducts);
       setOcrScanResults(results);
     } catch (err) {
       setOcrError(err?.message || 'Failed to read spec sheet image via OCR.');
@@ -1078,24 +902,7 @@ export default function App() {
   };
 
   const handleLoadScannedInStockParts = () => {
-    const inStockMatches = ocrScanResults
-      .filter((entry) => entry.status === 'In Stock' && entry.matchedPart)
-      .map((entry) => entry.matchedPart);
-
-    if (inStockMatches.length === 0) return;
-
-    setSelectedBuild((prev) => {
-      const next = { ...prev };
-      for (const part of inStockMatches) {
-        const matchedCat = CATEGORIES.find(
-          (cat) => normalizeText(cat) === normalizeText(part.category)
-        );
-        if (matchedCat) {
-          next[matchedCat] = { ...part, stock_status: 'In Stock' };
-        }
-      }
-      return next;
-    });
+    setSelectedBuild((prev) => applyInStockOcrMatches(prev, ocrScanResults).build);
   };
 
   const products = inventoryMode === 'active' ? activeProducts : preorderProducts;
@@ -1112,7 +919,7 @@ export default function App() {
 
   const selectedItems = useMemo(() => Object.values(selectedBuild).filter(Boolean), [selectedBuild]);
 
-  const customPartFlags = useMemo(() => getCustomPartFlags(selectedBuild), [selectedBuild]);
+  const customPartFlags = useMemo(() => getCustomBuildSummary(selectedBuild), [selectedBuild]);
   const hasAnyUnverifiedPart = customPartFlags.hasCustomPart;
 
   const totalPrice = useMemo(
@@ -1133,59 +940,16 @@ export default function App() {
   const currentPsu = effectiveParts['Power Supplies'];
   const currentCpu = effectiveParts.Processors;
   const currentGpu = effectiveParts['Video Cards'];
-  const currentBoard = effectiveParts.Motherboards;
-  const currentMemory = effectiveParts.Memory;
-  const currentStorage = effectiveParts.Storage;
 
   const psuInfo = useMemo(() => getPsuProfile(currentPsu), [currentPsu]);
 
   const powerMetrics = useMemo(() => {
-    const wattage = calculateRigWattage(effectiveParts, activeRamCount || 2, overclockEnabled);
-    const buffer = Number(dssRules.psuBufferWatts || 120);
-    const basePeak = wattage.activePeakWatts || 0;
-    const idleWatts =
-      basePeak > 0
-        ? Math.max(
-            18,
-            Math.round(
-              (currentCpu ? 12 : 0) +
-                (currentGpu ? 14 : 0) +
-                (currentBoard ? 10 : 0) +
-                (currentMemory ? 4 : 0) +
-                (currentStorage ? 2 : 0)
-            )
-          )
-        : 0;
-    const stockPeakWatts = wattage.stockPeakWatts || 0;
-    const ocPeakWatts = overclockEnabled
-      ? basePeak
-      : calculateRigWattage(effectiveParts, activeRamCount || 2, true).activePeakWatts || 0;
-    const recommendedPsuWatts =
-      basePeak > 0
-        ? Math.max(
-            wattage.recommendedPsuWatts || 0,
-            Math.ceil((basePeak + buffer) / 50) * 50
-          )
-        : 0;
-
-    return {
-      idleWatts,
-      stockPeakWatts,
-      ocPeakWatts,
-      activePeakWatts: basePeak,
-      recommendedPsuWatts,
-    };
-  }, [
-    effectiveParts,
-    currentCpu,
-    currentGpu,
-    currentBoard,
-    currentMemory,
-    currentStorage,
-    activeRamCount,
-    overclockEnabled,
-    dssRules.psuBufferWatts,
-  ]);
+    const bufferWatts = Number(dssRules.psuBufferWatts || 120);
+    return calculateRigWattage(effectiveParts, activeRamCount || 2, {
+      overclocked: overclockEnabled,
+      bufferWatts,
+    });
+  }, [effectiveParts, activeRamCount, overclockEnabled, dssRules.psuBufferWatts]);
 
   const ruleResults = useMemo(
     () =>
@@ -1195,8 +959,16 @@ export default function App() {
         recommendedPsuWatts: powerMetrics.recommendedPsuWatts,
         minRamGb: Number(dssRules.minRecommendedRamGB || 16),
         minStorageGb: Number(dssRules.minStorageCapacityGB || 500),
+        hasEstimatedPower: Boolean(
+          powerMetrics.hasMissingSpecs || powerMetrics.hasEstimatedCpuPeak
+        ),
       }),
     [effectiveParts, activeRamCount, powerMetrics, dssRules]
+  );
+
+  const verificationCoverage = useMemo(
+    () => getVerificationCoverage(ruleResults),
+    [ruleResults]
   );
 
   const compatibilityScore = useMemo(
@@ -1209,135 +981,44 @@ export default function App() {
     [currentCpu, currentGpu]
   );
 
-  const { actionableIssues, unknownCatalogIssues } = useMemo(() => {
-    const mapped = ruleResults
-      .filter((r) => r.status === 'fail' || r.status === 'warn' || r.status === 'unknown')
-      .map((r) => ({
-        id: r.ruleId,
-        category: r.category || 'General',
-        status: r.status,
-        unverified: Boolean(r.unverified),
-        severity:
-          r.status === 'fail'
-            ? 'critical'
-            : r.status === 'warn'
-            ? 'warning'
-            : r.unverified
-            ? 'unverified'
-            : 'unknown',
-        title: r.title || r.ruleId,
-        message: r.message || r.detail || '',
-        action: r.recommendation || r.action || 'Review component specifications.',
-      }));
+  const { actionableIssues, unknownCatalogIssues } = useMemo(
+    () => buildDiagnosticIssues(ruleResults),
+    [ruleResults]
+  );
 
-    return {
-      actionableIssues: mapped.filter(
-        (i) => i.severity === 'critical' || i.severity === 'warning' || i.unverified
-      ),
-      unknownCatalogIssues: mapped.filter((i) => i.severity === 'unknown' && !i.unverified),
-    };
-  }, [ruleResults]);
+  const recommendation = useMemo(
+    () =>
+      buildSystemRecommendation({
+        actionableIssues,
+        selectedItems,
+        existingPc,
+        currentCpu,
+        currentPsu,
+        psuTier: psuInfo.tier,
+        activePeakWatts: powerMetrics.activePeakWatts,
+        recommendedPsuWatts: powerMetrics.recommendedPsuWatts,
+      }),
+    [
+      actionableIssues,
+      selectedItems,
+      existingPc,
+      currentCpu,
+      currentPsu,
+      psuInfo.tier,
+      powerMetrics.activePeakWatts,
+      powerMetrics.recommendedPsuWatts,
+    ]
+  );
 
-  const recommendation = useMemo(() => {
-    const critical = actionableIssues.find((issue) => issue.severity === 'critical');
-    const unverifiedCustom = actionableIssues.find((issue) => issue.unverified);
-    const warnings = actionableIssues.filter((issue) => issue.severity === 'warning');
-    const preOrderPart = selectedItems.find((item) => item?.stock_status === 'Pre-Order');
-
-    if (critical) {
-      return {
-        title: critical.title,
-        tone: 'danger',
-        summary: `${critical.message}\n\nRecommended Action: ${critical.action}`,
-      };
-    }
-    if (unverifiedCustom) {
-      return {
-        title: 'Unverified Custom Part',
-        tone: 'warning',
-        summary: `${unverifiedCustom.message}\n\nRecommended Action: ${unverifiedCustom.action}`,
-      };
-    }
-    if (warnings.length > 0) {
-      return {
-        title: `${warnings.length} Hardware Balance Note${warnings.length > 1 ? 's' : ''}`,
-        tone: 'warning',
-        summary: `Hardware is operational, with ${warnings.length} balance note(s).\n\nPrimary Focus: ${warnings[0].message}`,
-      };
-    }
-    if (preOrderPart) {
-      return {
-        title: 'Pre-Order Allocation Pending',
-        tone: 'info',
-        summary: `${preOrderPart.name} is reserved via supplier pre-order.`,
-      };
-    }
-    if (selectedItems.length === 0 && Object.values(existingPc).filter(Boolean).length === 0) {
-      return {
-        title: 'System Validator Ready',
-        tone: 'neutral',
-        summary:
-          'Select components or run the Smart Build Assistant to verify compatibility, power draw, and balance.',
-      };
-    }
-    const cpuSock = detectCpuSocket(currentCpu);
-    return {
-      title: 'Platform Architecture Verified',
-      tone: 'success',
-      summary: `All checked platform rules passed.\n• Socket: ${cpuSock || 'Verified'}\n• PSU Tier: ${
-        currentPsu ? `Tier ${psuInfo.tier}` : 'Pending'
-      }\n• Peak Load: ${powerMetrics.activePeakWatts}W (Rec PSU: ${powerMetrics.recommendedPsuWatts}W).`,
-    };
-  }, [
-    actionableIssues,
-    selectedItems,
-    existingPc,
-    currentCpu,
-    currentPsu,
-    psuInfo,
-    powerMetrics,
-  ]);
-
-  const performanceTier = useMemo(() => {
-    const cpuTier = deriveComponentTier(currentCpu, 'Processors');
-    const gpuTier = deriveComponentTier(currentGpu, 'Video Cards');
-    const cpuName = String(currentCpu?.name || '').toUpperCase();
-    const hasApuGraphics = cpuName.includes('G') && !currentGpu;
-
-    if (!currentGpu && !hasApuGraphics) {
-      return {
-        label: 'Select a Graphics Card',
-        description:
-          'Choose a GPU (or an APU with integrated graphics) to evaluate gaming and productivity performance tiers.',
-      };
-    }
-    const critical = actionableIssues.find((issue) => issue.severity === 'critical');
-    if (critical) {
-      return {
-        label: 'Compatibility Conflict Detected',
-        description: critical.message,
-      };
-    }
-    if (gpuTier >= 4 && cpuTier >= 4) {
-      return {
-        label: 'Performance Gaming & Creator Rig',
-        description:
-          'Strong CPU and GPU tier alignment for high-frame-rate 1440p gaming and creative workloads.',
-      };
-    }
-    if (gpuTier === 3 || cpuTier === 3) {
-      return {
-        label: '1080p Esports & Productivity Rig',
-        description:
-          'Well-suited for smooth 1080p competitive play, streaming, and everyday productivity.',
-      };
-    }
-    return {
-      label: 'Entry / Office Desktop Configuration',
-      description:
-        'Balanced for office/academic workloads, light gaming, and energy-conscious builds.',
-    };
-  }, [currentCpu, currentGpu, actionableIssues]);
+  const performanceTier = useMemo(
+    () =>
+      evaluatePerformanceTier({
+        currentCpu,
+        currentGpu,
+        actionableIssues,
+      }),
+    [currentCpu, currentGpu, actionableIssues]
+  );
 
   const activeRule = useMemo(
     () => ruleResults.find((r) => r.ruleId === selectedRuleId) || ruleResults[0] || null,
@@ -1352,142 +1033,70 @@ export default function App() {
     [allCatalogPool, compareCategory]
   );
 
-  const brandsForActiveCategory = useMemo(() => {
-    const active = normalizeText(activeTab);
-    const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
-    const brands = catalogProducts
-      .filter((product) => {
-        if (normalizeText(product?.category) !== active || !product?.brand) return false;
-        if (
-          !isReferenceView &&
-          inventoryMode === 'active' &&
-          !showSoldOut &&
-          product?.stock_status === 'Sold Out'
-        ) {
-          return false;
-        }
-        return true;
-      })
-      .map((product) => product.brand);
-    return ['All', ...new Set(brands)];
-  }, [catalogProducts, activeTab, activePage, upgradeMode, inventoryMode, showSoldOut]);
+  const catalogFilterOpts = useMemo(
+    () => ({
+      isReferenceView: activePage === 'upgrade' && upgradeMode === 'reference',
+      inventoryMode,
+      showSoldOut,
+    }),
+    [activePage, upgradeMode, inventoryMode, showSoldOut]
+  );
 
-  const formFactorsForActiveCategory = useMemo(() => {
-    const active = normalizeText(activeTab);
-    const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
-    const factors = catalogProducts
-      .filter((product) => {
-        if (normalizeText(product?.category) !== active) return false;
-        if (
-          !isReferenceView &&
-          inventoryMode === 'active' &&
-          !showSoldOut &&
-          product?.stock_status === 'Sold Out'
-        ) {
-          return false;
-        }
-        return true;
-      })
-      .map((product) => detectPartFormFactor(product))
-      .filter((ff) => ff !== 'Standard');
-    return ['All', ...new Set(factors)];
-  }, [catalogProducts, activeTab, activePage, upgradeMode, inventoryMode, showSoldOut]);
+  const brandsForActiveCategory = useMemo(
+    () => getBrandsForCategory(catalogProducts, activeTab, catalogFilterOpts),
+    [catalogProducts, activeTab, catalogFilterOpts]
+  );
 
-  const filteredProducts = useMemo(() => {
-    const active = normalizeText(activeTab);
-    const query = normalizeText(searchQuery);
-    const minP = minPrice !== '' ? Number(minPrice) : null;
-    const maxP = maxPrice !== '' ? Number(maxPrice) : null;
+  const formFactorsForActiveCategory = useMemo(
+    () => getFormFactorsForCategory(catalogProducts, activeTab, catalogFilterOpts),
+    [catalogProducts, activeTab, catalogFilterOpts]
+  );
 
-    const filtered = catalogProducts.filter((product) => {
-      if (normalizeText(product?.category) !== active) return false;
+  const filteredProducts = useMemo(
+    () =>
+      filterAndSortCatalogProducts(catalogProducts, {
+        category: activeTab,
+        searchQuery,
+        brand: selectedBrand,
+        formFactor: selectedFormFactor,
+        minPrice,
+        maxPrice,
+        sortBy,
+        ...catalogFilterOpts,
+      }),
+    [
+      catalogProducts,
+      activeTab,
+      searchQuery,
+      selectedBrand,
+      selectedFormFactor,
+      minPrice,
+      maxPrice,
+      sortBy,
+      catalogFilterOpts,
+    ]
+  );
 
-      const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
-      if (
-        !isReferenceView &&
-        inventoryMode === 'active' &&
-        !showSoldOut &&
-        product?.stock_status === 'Sold Out'
-      ) {
-        return false;
-      }
+  const categoryCounts = useMemo(
+    () => getCategoryCounts(catalogProducts, catalogFilterOpts),
+    [catalogProducts, catalogFilterOpts]
+  );
 
-      const searchableText = [
-        product?.name,
-        product?.brand,
-        product?.sku_code,
-        product?.socket,
-        product?.chipset,
-        product?.memory_type,
-        product?.capacity,
-        product?.interface_type,
-        product?.form_factor,
-        product?.psu_tier,
-        product?.specs,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
+  const slotManifestRows = useMemo(
+    () => buildSlotManifestRows(selectedBuild, selectedRamCount),
+    [selectedBuild, selectedRamCount]
+  );
 
-      const matchesSearch = query === '' || searchableText.includes(query);
-      const matchesBrand = selectedBrand === 'All' || product?.brand === selectedBrand;
-      const matchesFormFactor =
-        selectedFormFactor === 'All' || detectPartFormFactor(product) === selectedFormFactor;
-
-      const itemPrice = Number(product?.price || 0);
-      const matchesMinPrice = minP === null || itemPrice >= minP;
-      const matchesMaxPrice = maxP === null || itemPrice <= maxP;
-
-      return (
-        matchesSearch &&
-        matchesBrand &&
-        matchesFormFactor &&
-        matchesMinPrice &&
-        matchesMaxPrice
-      );
-    });
-
-    return filtered.sort((a, b) => {
-      const priceA = Number(a?.price || 0);
-      const priceB = Number(b?.price || 0);
-      if (sortBy === 'price-asc') return priceA - priceB;
-      if (sortBy === 'price-desc') return priceB - priceA;
-      if (sortBy === 'rating') return Number(b?.hardware_score || 0) - Number(a?.hardware_score || 0);
-      return 0;
-    });
-  }, [
-    catalogProducts,
-    activeTab,
-    searchQuery,
-    selectedBrand,
-    selectedFormFactor,
-    minPrice,
-    maxPrice,
-    sortBy,
-    activePage,
-    upgradeMode,
-    inventoryMode,
-    showSoldOut,
-  ]);
-
-  const categoryCounts = useMemo(() => {
-    const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
-    return CATEGORIES.reduce((acc, category) => {
-      acc[category] = catalogProducts.filter((product) => {
-        if (normalizeText(product?.category) !== normalizeText(category)) return false;
-        if (
-          !isReferenceView &&
-          inventoryMode === 'active' &&
-          !showSoldOut &&
-          product?.stock_status === 'Sold Out'
-        ) {
-          return false;
-        }
-        return true;
-      }).length;
-      return acc;
-    }, {});
-  }, [catalogProducts, activePage, upgradeMode, inventoryMode, showSoldOut]);
+  const powerDisplaySummary = useMemo(
+    () =>
+      computePowerDisplayMetrics({
+        powerMetrics,
+        psuInfo,
+        powerDisplayView,
+        overclockEnabled,
+      }),
+    [powerMetrics, psuInfo, powerDisplayView, overclockEnabled]
+  );
 
   const handleRunSmartBuildAssistant = () => {
     const profileKey =
@@ -1497,7 +1106,6 @@ export default function App() {
       budgetInput: assistantBudget,
       profile: profileKey,
       overclockEnabled,
-      previousBuild: selectedBuild,
     });
 
     if (!result.ok) {
@@ -1507,10 +1115,11 @@ export default function App() {
 
     setSelectedBuild(result.build);
     setSelectedRamCount(result.ramStickCount || 2);
-    setAssistantStatus(
-      result.statusMessage ||
-        `Recommended Build (${profileKey}) | Total: ${peso(result.totalPrice)} / Budget: ${peso(result.budget)}`
-    );
+    const detailLine =
+      Array.isArray(result.notes) && result.notes.length > 0
+        ? ` (${result.notes.join(' ')})`
+        : '';
+    setAssistantStatus(`${result.statusMessage}${detailLine}`);
     setBuildFocused(true);
   };
 
@@ -1521,75 +1130,31 @@ export default function App() {
     const refCode = `BB-${printReferenceId}`;
 
     try {
-      await supabase.from('bytebuild_quotations').insert([
-        {
-          reference_code: refCode,
-          user_id: currentUser ? currentUser.id : null,
-          customer_email: currentUser ? currentUser.email : 'Walk-in / Guest',
-          build_data: { ...selectedBuild, __ramStickCount: selectedRamCount },
-          total_price: totalPrice,
-          compatibility_score: compatibilityScore,
-        },
-      ]);
+      const payload = buildQuotationPayload({
+        refCode,
+        currentUser,
+        selectedBuild,
+        selectedRamCount,
+        totalPrice,
+        compatibilityScore,
+      });
+      await supabase.from('bytebuild_quotations').insert([payload]);
     } catch {
       // Fallback gracefully
     }
 
     try {
-      const rowsHtml = CATEGORIES.map((cat) => {
-        const item = selectedBuild[cat];
-        if (!item) return '';
-        const ramDetails = cat === 'Memory' ? getRamSummary(item, selectedRamCount) : null;
-        const linePrice = ramDetails ? ramDetails.totalPrice : Number(item.price || 0);
-        const componentDescription = ramDetails
-          ? `${item.name} (${ramDetails.stickCount} x ${ramDetails.perStickCapacity}GB)`
-          : item.name;
-        const unverifiedNote = item.unverified || item.isCustomInput ? ' [unverified]' : '';
-        return `
-          <tr>
-            <td style="padding:8px;border-bottom:1px solid #cbd5e1;font-weight:bold;color:#334155;">${getCategoryLabel(cat)}</td>
-            <td style="padding:8px;border-bottom:1px solid #cbd5e1;color:#0f172a;">${componentDescription}${unverifiedNote} <span style="color:#64748b;font-size:11px;">(${item.sku_code || item.id})</span></td>
-            <td style="padding:8px;border-bottom:1px solid #cbd5e1;text-align:right;font-family:sans-serif;font-weight:bold;">${peso(linePrice)}</td>
-          </tr>`;
-      }).join('');
-
-      const invoiceHtml = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8" />
-  <title>ByteBuild Quotation ${refCode}</title>
-</head>
-<body style="font-family:Arial,sans-serif;max-width:750px;margin:24px auto;padding:20px;color:#0f172a;border:1px solid #cbd5e1;border-radius:8px;">
-  <div style="display:flex;justify-content:space-between;border-bottom:2px solid #0f172a;padding-bottom:12px;margin-bottom:16px;">
-    <div>
-      <h1 style="margin:0;font-size:20px;">BYTEBUILD COMPUTER SOLUTIONS</h1>
-      <p style="margin:4px 0 0;font-size:12px;color:#475569;">Quezon City, Metro Manila · Local PH Retail Distributor Quotation</p>
-    </div>
-    <div style="text-align:right;">
-      <strong style="font-size:14px;">OFFICIAL QUOTATION</strong>
-      <p style="margin:4px 0 0;font-family:monospace;font-size:12px;">REF: ${refCode}</p>
-      <p style="margin:2px 0 0;font-size:11px;color:#64748b;">Date: ${printDateString}</p>
-    </div>
-  </div>
-  <table style="width:100%;border-collapse:collapse;font-size:13px;">
-    <thead>
-      <tr style="background:#f1f5f9;text-align:left;">
-        <th style="padding:8px;border-bottom:2px solid #cbd5e1;">Category</th>
-        <th style="padding:8px;border-bottom:2px solid #cbd5e1;">Component Specification</th>
-        <th style="padding:8px;border-bottom:2px solid #cbd5e1;text-align:right;">Price (PHP)</th>
-      </tr>
-    </thead>
-    <tbody>${rowsHtml}</tbody>
-  </table>
-  <div style="margin-top:16px;padding:12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
-    <div>
-      <div style="font-size:12px;color:#475569;">Compatibility Score: <strong>${compatibilityScore}%</strong> · Rec. PSU: <strong>${powerMetrics.recommendedPsuWatts}W</strong></div>
-      <div style="font-size:11px;color:#64748b;margin-top:2px;">Peak Load: ${powerMetrics.activePeakWatts}W</div>
-    </div>
-    <div style="font-size:20px;font-weight:900;color:#1e3a8a;font-family:sans-serif;">${peso(totalPrice)}</div>
-  </div>
-</body>
-</html>`;
+      const invoiceHtml = buildQuotationHtmlDocument({
+        refCode,
+        printDateString,
+        selectedBuild,
+        selectedRamCount,
+        totalPrice,
+        compatibilityScore,
+        verificationCoverage,
+        activePeakWatts: powerMetrics.activePeakWatts,
+        recommendedPsuWatts: powerMetrics.recommendedPsuWatts,
+      });
 
       const blob = new Blob([invoiceHtml], { type: 'text/html' });
       const url = URL.createObjectURL(blob);
@@ -1706,10 +1271,9 @@ export default function App() {
   };
 
   const handleLoadSavedBuild = (buildRecord) => {
-    const storedBuildData = buildRecord.build_data || INITIAL_BUILD;
-    const { __ramStickCount, ...buildData } = storedBuildData;
-    setSelectedBuild(buildData);
-    setSelectedRamCount(Number(__ramStickCount) || 2);
+    const { buildData, ramStickCount } = normalizeSavedBuildRecord(buildRecord);
+    setSelectedBuild({ ...INITIAL_BUILD, ...buildData });
+    setSelectedRamCount(ramStickCount);
     setActivePage('builder');
     setBuildFocused(true);
   };
@@ -1728,20 +1292,27 @@ export default function App() {
   const handlePreorderSubmit = async (e) => {
     e.preventDefault();
     if (!preorderModalItem) return;
+
+    const validation = validatePreorderInput({
+      customerName: preorderForm.customer_name,
+      contactNumber: preorderForm.contact_number,
+    });
+    if (!validation.valid) {
+      alert(validation.error);
+      return;
+    }
+
     setPreorderSubmitting(true);
     try {
-      const { error } = await supabase.from('bytebuild_preorder_requests').insert([
-        {
-          user_id: currentUser ? currentUser.id : null,
-          customer_name: preorderForm.customer_name,
-          contact_number: preorderForm.contact_number,
-          email: preorderForm.email || (currentUser ? currentUser.email : ''),
-          product_id: String(preorderModalItem.id || preorderModalItem.sku_code || ''),
-          product_name: preorderModalItem.name,
-          estimated_price: Number(preorderModalItem.price || 0),
-          status: 'Pending Supplier Confirmation',
-        },
-      ]);
+      const payload = buildPreorderRequestPayload({
+        currentUser,
+        customerName: validation.customerName,
+        contactNumber: validation.contactNumber,
+        email: preorderForm.email,
+        product: preorderModalItem,
+      });
+
+      const { error } = await supabase.from('bytebuild_preorder_requests').insert([payload]);
       if (error) throw error;
       alert(
         `Pre-order submitted for ${preorderModalItem.name}! ByteBuild staff will contact you once supplier allocation is verified.`
@@ -1764,16 +1335,9 @@ export default function App() {
   };
 
   const renderProductRow = (product, allowAdd = true, existingCategory = null) => {
-    const isReference = product.source_type === 'reference';
-    const isUnverified = Boolean(product.unverified || product.isCustomInput);
-    const status = isUnverified
-      ? 'unverified'
-      : isReference
-      ? 'reference'
-      : inventoryMode === 'preorder'
-      ? 'Pre-Order'
-      : product.stock_status || 'In Stock';
-    const isSoldOut = !isReference && status === 'Sold Out';
+    const isReferenceView = activePage === 'upgrade' && upgradeMode === 'reference';
+    const status = getItemDisplayStatus(product, { inventoryMode, isReferenceView });
+    const isSoldOut = status === 'Sold Out';
     const formFactorTag = detectPartFormFactor(product);
     const isPsu = normalizeText(product?.category) === 'power supplies';
     const psu = isPsu ? getPsuProfile(product) : null;
@@ -1851,7 +1415,7 @@ export default function App() {
           <div className="text-left sm:text-right">
             <p className="text-xs text-slate-500">Retail Price</p>
             <p className="text-base font-black text-white font-mono">
-              {isReference || !product.price ? 'Owned' : peso(product.price)}
+              {status === 'reference' || !product.price ? 'Owned' : peso(product.price)}
             </p>
           </div>
 
@@ -2138,189 +1702,194 @@ export default function App() {
     );
   };
 
-  const renderRationaleAndCompareCards = () => (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
-      <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">
-              Build Compatibility Checklist
-            </span>
-            <p className="text-[11px] text-slate-400">
-              Click any check below to see how your parts were verified.
-            </p>
-          </div>
-          {activeRule && (
-            <span
-              className={`text-[10px] font-bold px-2.5 py-0.5 rounded uppercase shrink-0 ${
-                activeRule.status === 'unknown' || activeRule.unverified
-                  ? 'bg-slate-800 text-slate-300 border border-slate-700'
-                  : activeRule.status === 'fail'
-                  ? 'bg-red-950 text-red-400 border border-red-800/50'
-                  : activeRule.status === 'warn'
-                  ? 'bg-amber-950 text-amber-300 border border-amber-700/50'
-                  : 'bg-emerald-950 text-emerald-400 border border-emerald-800/50'
-              }`}
-            >
-              {getStatusBadgeLabel(activeRule.status, activeRule.unverified)}
-            </span>
-          )}
-        </div>
+  const renderRationaleAndCompareCards = () => {
+    const activeChip = activeRule ? getRuleChipMeta(activeRule) : null;
 
-        {activeRule ? (
-          <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d] space-y-1.5 text-xs">
-            <div className="flex items-center justify-between gap-2">
-              <p className="font-bold text-white">{activeRule.title || activeRule.ruleId}</p>
-              <span className="text-[10px] font-mono text-slate-500">{activeRule.ruleId}</span>
-            </div>
-            <p className="text-slate-200">{activeRule.message || activeRule.detail}</p>
-            {RULE_DISPLAY_META[activeRule.ruleId]?.whyItMatters && (
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
+        <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">
+                Build Compatibility Checklist
+              </span>
               <p className="text-[11px] text-slate-400">
-                <strong className="text-slate-300">Why this matters:</strong>{' '}
-                {RULE_DISPLAY_META[activeRule.ruleId].whyItMatters}
+                Click any check below to see how your parts were verified.
               </p>
-            )}
-            {activeRule.recommendation && activeRule.status !== 'pass' && (
-              <p className="text-blue-400 text-[11px] font-semibold">
-                Next Step: {activeRule.recommendation}
-              </p>
-            )}
-            {activeRule.category && effectiveParts[activeRule.category] && (
-              <a
-                href={buildLearnMoreUrl(effectiveParts[activeRule.category])}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-block pt-1 text-[11px] text-sky-400 hover:underline font-semibold"
+            </div>
+            {activeChip && (
+              <span
+                className={`text-[10px] font-bold px-2.5 py-0.5 rounded uppercase shrink-0 ${
+                  activeRule.status === 'unknown' || activeRule.unverified
+                    ? 'bg-slate-800 text-slate-300 border border-slate-700'
+                    : activeRule.status === 'fail'
+                    ? 'bg-red-950 text-red-400 border border-red-800/50'
+                    : activeRule.status === 'warn'
+                    ? 'bg-amber-950 text-amber-300 border border-amber-700/50'
+                    : activeRule.dataSource === 'estimated'
+                    ? 'bg-amber-950/70 text-amber-300 border border-amber-700/50'
+                    : 'bg-emerald-950 text-emerald-400 border border-emerald-800/50'
+                }`}
               >
-                View Specs for {effectiveParts[activeRule.category].name} →
-              </a>
+                {activeChip.badgeLabel}
+              </span>
             )}
           </div>
-        ) : (
-          <p className="text-xs text-slate-400">Select parts to inspect compatibility checks.</p>
-        )}
 
-        {ruleResults.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pt-2 border-t border-[#1f293d]">
-            {ruleResults.map((rule) => {
-              const label = RULE_DISPLAY_META[rule.ruleId]?.shortLabel || rule.title || rule.ruleId;
-              const statusDot =
-                rule.status === 'pass'
-                  ? 'bg-emerald-400'
-                  : rule.status === 'fail'
-                  ? 'bg-red-400'
-                  : rule.status === 'warn'
-                  ? 'bg-amber-400'
-                  : 'bg-slate-400';
-
-              return (
-                <button
-                  key={rule.ruleId}
-                  type="button"
-                  onClick={() => setSelectedRuleId(rule.ruleId)}
-                  className={`px-2.5 py-1 rounded text-[11px] font-semibold border flex items-center gap-1.5 transition-colors ${
-                    activeRule?.ruleId === rule.ruleId
-                      ? 'bg-blue-600 border-blue-500 text-white'
-                      : rule.status === 'fail'
-                      ? 'bg-red-950/50 border-red-800/60 text-red-200 hover:border-red-500'
-                      : rule.status === 'warn'
-                      ? 'bg-amber-950/50 border-amber-800/60 text-amber-200 hover:border-amber-500'
-                      : rule.status === 'pass'
-                      ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200 hover:border-emerald-500'
-                      : 'bg-[#0b0f19] border-[#1f293d] text-slate-300 hover:text-white'
-                  }`}
+          {activeRule && activeChip ? (
+            <div className="p-3 rounded bg-[#0b0f19] border border-[#1f293d] space-y-1.5 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <p className="font-bold text-white">{activeRule.title || activeRule.ruleId}</p>
+                <span className="text-[10px] font-mono text-slate-500">{activeRule.ruleId}</span>
+              </div>
+              <p className="text-slate-200">{activeRule.message || activeRule.detail}</p>
+              {activeRule.dataSource && (
+                <p className="text-[10px] text-slate-400 font-mono">
+                  Source: {activeRule.dataSource}
+                  {Array.isArray(activeRule.missingFields) && activeRule.missingFields.length > 0
+                    ? ` · Missing: ${activeRule.missingFields.join(', ')}`
+                    : ''}
+                </p>
+              )}
+              {activeChip.whyItMatters && (
+                <p className="text-[11px] text-slate-400">
+                  <strong className="text-slate-300">Why this matters:</strong>{' '}
+                  {activeChip.whyItMatters}
+                </p>
+              )}
+              {activeRule.recommendation && activeRule.status !== 'pass' && (
+                <p className="text-blue-400 text-[11px] font-semibold">
+                  Next Step: {activeRule.recommendation}
+                </p>
+              )}
+              {activeRule.category && effectiveParts[activeRule.category] && (
+                <a
+                  href={buildLearnMoreUrl(effectiveParts[activeRule.category])}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-block pt-1 text-[11px] text-sky-400 hover:underline font-semibold"
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`}></span>
-                  <span>{label}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
-            Compare & Swap Components
-          </span>
-          <select
-            value={compareCategory}
-            onChange={(e) => setCompareCategory(e.target.value)}
-            className="bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1 text-[11px] text-white"
-          >
-            {CATEGORIES.map((cat) => (
-              <option key={cat} value={cat}>
-                {getCategoryLabel(cat)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
-          {comparisonItems.length === 0 ? (
-            <p className="text-xs text-slate-500 py-4 text-center">
-              No items available for comparison in {getCategoryLabel(compareCategory)}.
-            </p>
+                  View Specs for {effectiveParts[activeRule.category].name} →
+                </a>
+              )}
+            </div>
           ) : (
-            comparisonItems.map((item) => {
-              const isPicked = selectedBuild[compareCategory]?.id === item.id;
-              const itemUnverified = Boolean(item.unverified || item.isCustomInput);
-              const learnHref = buildLearnMoreUrl(item);
-              const effectivePrice = getEffectiveItemPrice(
-                compareCategory,
-                item,
-                selectedRamCount
-              );
-              return (
-                <div
-                  key={`cmp-${item.id}`}
-                  className="p-2 rounded bg-[#0b0f19] border border-[#1f293d] flex items-center justify-between gap-2 text-xs"
-                >
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <p className="font-bold text-white truncate">{item.name}</p>
-                      {itemUnverified && (
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-700/50 font-bold">
-                          unverified
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[10px] text-slate-400 font-mono">
-                      {peso(effectivePrice)} · Score: {item.hardware_score || 75}/100
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {learnHref && (
-                      <a
-                        href={learnHref}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[10px] text-sky-400 hover:underline font-semibold"
-                      >
-                        Learn More
-                      </a>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleSelectProduct(item)}
-                      className={`px-2 py-1 rounded text-[10px] font-bold ${
-                        isPicked
-                          ? 'bg-emerald-700 text-white'
-                          : 'bg-blue-600 hover:bg-blue-500 text-white'
-                      }`}
-                    >
-                      {isPicked ? 'Selected' : 'Use'}
-                    </button>
-                  </div>
-                </div>
-              );
-            })
+            <p className="text-xs text-slate-400">Select parts to inspect compatibility checks.</p>
+          )}
+
+          {ruleResults.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 pt-2 border-t border-[#1f293d]">
+              {ruleResults.map((rule) => {
+                const chip = getRuleChipMeta(rule);
+                return (
+                  <button
+                    key={rule.ruleId}
+                    type="button"
+                    onClick={() => setSelectedRuleId(rule.ruleId)}
+                    className={`px-2.5 py-1 rounded text-[11px] font-semibold border flex items-center gap-1.5 transition-colors ${
+                      activeRule?.ruleId === rule.ruleId
+                        ? 'bg-blue-600 border-blue-500 text-white'
+                        : rule.status === 'fail'
+                        ? 'bg-red-950/50 border-red-800/60 text-red-200 hover:border-red-500'
+                        : rule.status === 'warn' || rule.dataSource === 'estimated'
+                        ? 'bg-amber-950/50 border-amber-800/60 text-amber-200 hover:border-amber-500'
+                        : rule.status === 'pass'
+                        ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200 hover:border-emerald-500'
+                        : 'bg-[#0b0f19] border-[#1f293d] text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${chip.dotClass}`}></span>
+                    <span>{chip.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
+
+        <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+              Compare & Swap Components
+            </span>
+            <select
+              value={compareCategory}
+              onChange={(e) => setCompareCategory(e.target.value)}
+              className="bg-[#0b0f19] border border-[#1f293d] rounded px-2 py-1 text-[11px] text-white"
+            >
+              {CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>
+                  {getCategoryLabel(cat)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+            {comparisonItems.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4 text-center">
+                No items available for comparison in {getCategoryLabel(compareCategory)}.
+              </p>
+            ) : (
+              comparisonItems.map((item) => {
+                const isPicked = selectedBuild[compareCategory]?.id === item.id;
+                const itemUnverified = isCustomPartItem(item);
+                const learnHref = buildLearnMoreUrl(item);
+                const effectivePrice = getEffectiveItemPrice(
+                  compareCategory,
+                  item,
+                  selectedRamCount
+                );
+                return (
+                  <div
+                    key={`cmp-${item.id}`}
+                    className="p-2 rounded bg-[#0b0f19] border border-[#1f293d] flex items-center justify-between gap-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-bold text-white truncate">{item.name}</p>
+                        {itemUnverified && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-700/50 font-bold">
+                            unverified
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        {peso(effectivePrice)} · Score: {item.hardware_score || 75}/100
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {learnHref && (
+                        <a
+                          href={learnHref}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[10px] text-sky-400 hover:underline font-semibold"
+                        >
+                          Learn More
+                        </a>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleSelectProduct(item)}
+                        className={`px-2 py-1 rounded text-[10px] font-bold ${
+                          isPicked
+                            ? 'bg-emerald-700 text-white'
+                            : 'bg-blue-600 hover:bg-blue-500 text-white'
+                        }`}
+                      >
+                        {isPicked ? 'Selected' : 'Use'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderCatalogList = (existingCategory = null) => (
     <div className="space-y-4">
@@ -2481,322 +2050,319 @@ export default function App() {
     </div>
   );
 
-  const renderBuildSummary = (showFocusButton = false) => {
-    const displayedWatts =
-      powerDisplayView === 'idle' ? powerMetrics.idleWatts : powerMetrics.activePeakWatts;
-    const psuCap = psuInfo.watts || powerMetrics.recommendedPsuWatts || 650;
-    const loadPercent =
-      displayedWatts > 0 ? Math.min((displayedWatts / psuCap) * 100, 100) : 0;
-    const isOverPsuCap =
-      psuInfo.watts > 0 && powerMetrics.activePeakWatts > psuInfo.watts;
-
-    return (
-      <div
-        id="printable-quotation"
-        className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5"
-      >
-        <div className="hidden print:block mb-4 border-b-2 border-slate-900 pb-3">
-          <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-lg font-black tracking-tight text-slate-900 uppercase">
-                BYTEBUILD COMPUTER SOLUTIONS
-              </h1>
-              <p className="text-[8pt] text-slate-600">
-                Quezon City, Metro Manila · Local PH Retail Distributor Quotation
-              </p>
-            </div>
-            <div className="text-right">
-              <h2 className="text-sm font-black text-slate-900 uppercase">OFFICIAL QUOTATION</h2>
-              <p className="text-[8pt] font-mono text-slate-600">REF: BB-{printReferenceId}</p>
-              <p className="text-[8pt] text-slate-500">Date: {printDateString}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#1f293d] pb-2 mb-2 print:hidden">
+  const renderBuildSummary = (showFocusButton = false) => (
+    <div
+      id="printable-quotation"
+      className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5"
+    >
+      <div className="hidden print:block mb-4 border-b-2 border-slate-900 pb-3">
+        <div className="flex justify-between items-start">
           <div>
-            <h3 className="text-xs font-bold text-white uppercase tracking-wider leading-tight">
-              System Build
-            </h3>
-            <p className="text-[10px] text-slate-400">
-              {selectedItems.length}/8 components configured
+            <h1 className="text-lg font-black tracking-tight text-slate-900 uppercase">
+              BYTEBUILD COMPUTER SOLUTIONS
+            </h1>
+            <p className="text-[8pt] text-slate-600">
+              Quezon City, Metro Manila · Local PH Retail Distributor Quotation
             </p>
           </div>
-
-          <div className="flex flex-wrap items-center gap-1">
-            {showFocusButton && selectedItems.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setBuildFocused(true)}
-                className="px-2 py-0.5 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-bold"
-              >
-                Focus Build
-              </button>
-            )}
-            <button
-              onClick={handleSaveCurrentBuild}
-              disabled={savingBuild || selectedItems.length === 0}
-              className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
-            >
-              {savingBuild ? 'Saving...' : 'Save'}
-            </button>
-            <button
-              onClick={handleExportQuotation}
-              disabled={exportingQuote || selectedItems.length === 0}
-              className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-bold disabled:opacity-40"
-              title="Download quotation file & log to database"
-            >
-              {exportingQuote ? 'Exporting...' : 'Export'}
-            </button>
-            <button
-              onClick={() => window.print()}
-              disabled={selectedItems.length === 0}
-              className="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
-            >
-              Print
-            </button>
-            <button
-              onClick={handleClearBuild}
-              className="px-1.5 py-0.5 text-slate-400 hover:text-white text-[10px]"
-            >
-              Reset
-            </button>
-          </div>
-        </div>
-
-        <div className="space-y-1 print-table-wrapper">
-          {CATEGORIES.map((category) => {
-            const item = selectedBuild[category];
-            const isMemory = category === 'Memory';
-            const isPsu = category === 'Power Supplies';
-            const itemUnverified = Boolean(item && (item.unverified || item.isCustomInput));
-            const printRowClass = !item ? 'print:hidden' : '';
-            const ramLine = isMemory && item ? getRamSummary(item, selectedRamCount) : null;
-
-            const shortLabel =
-              category === 'Processors'
-                ? 'CPU'
-                : category === 'Motherboards'
-                ? 'MOBO'
-                : category === 'Video Cards'
-                ? 'GPU'
-                : category === 'Memory'
-                ? 'RAM'
-                : category === 'Storage'
-                ? 'SSD'
-                : category === 'Power Supplies'
-                ? 'PSU'
-                : category === 'CPU Coolers'
-                ? 'COOLER'
-                : 'CASE';
-
-            return (
-              <div
-                key={category}
-                className={`px-2 py-1 rounded border border-[#1f293d] bg-[#0b0f19] flex items-center justify-between gap-2 text-left print-table-row ${printRowClass}`}
-              >
-                <div className="min-w-0 flex-1 flex items-center gap-1.5 print-cell-name">
-                  <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0 w-12">
-                    {shortLabel}
-                  </span>
-
-                  <p className="text-[11px] font-semibold text-white truncate">
-                    {item ? (
-                      item.name
-                    ) : (
-                      <span className="text-slate-600 italic">Unassigned</span>
-                    )}
-                    {ramLine && (
-                      <span className="text-blue-300 font-medium">
-                        {' '}
-                        · {ramLine.stickCount}x {ramLine.perStickCapacity || ''}GB
-                      </span>
-                    )}
-                  </p>
-
-                  {itemUnverified && (
-                    <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-700/50 shrink-0 print:hidden">
-                      unverified
-                    </span>
-                  )}
-
-                  {isPsu && item && (
-                    <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800/40 shrink-0 print:hidden">
-                      T-{getPsuProfile(item).tier}
-                    </span>
-                  )}
-
-                  {isMemory && item && (
-                    <div className="flex items-center gap-0.5 bg-[#111827] px-1 rounded shrink-0 print:hidden">
-                      {[1, 2, 4].map((count) => (
-                        <button
-                          key={count}
-                          onClick={() => setSelectedRamCount(count)}
-                          disabled={ramLine?.isKit && count < 2}
-                          className={`px-1 text-[8px] font-bold rounded disabled:opacity-30 ${
-                            selectedRamCount === count
-                              ? 'bg-blue-600 text-white'
-                              : 'text-slate-400'
-                          }`}
-                        >
-                          {count}x
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1.5 shrink-0 print-cell-price">
-                  <span className="text-[11px] font-mono font-bold text-slate-200 print-price">
-                    {item
-                      ? getEffectiveItemPrice(category, item, selectedRamCount) > 0
-                        ? peso(getEffectiveItemPrice(category, item, selectedRamCount))
-                        : 'Included'
-                      : '--'}
-                  </span>
-                  {item && (
-                    <button
-                      onClick={() =>
-                        setSelectedBuild((prev) => ({ ...prev, [category]: null }))
-                      }
-                      className="text-slate-500 hover:text-red-400 font-bold text-xs leading-none print:hidden"
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="mt-2.5 pt-2 border-t border-[#1f293d] print-summary-box">
-          <div className="mb-2 p-2 rounded bg-[#0b0f19] border border-[#1f293d] space-y-1.5 print:hidden">
-            <div className="flex flex-wrap items-center justify-between gap-1">
-              <div className="flex items-center gap-1 bg-[#111827] p-0.5 rounded border border-[#1f293d]">
-                {[
-                  { id: 'idle', label: 'Idle' },
-                  { id: 'load', label: 'Peak Load' },
-                ].map((tab) => (
-                  <button
-                    key={tab.id}
-                    type="button"
-                    onClick={() => setPowerDisplayView(tab.id)}
-                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
-                      powerDisplayView === tab.id
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex items-center gap-1 bg-[#111827] p-0.5 rounded border border-[#1f293d]">
-                {[
-                  { oc: false, label: 'Stock' },
-                  { oc: true, label: 'Overclocked' },
-                ].map((mode) => (
-                  <button
-                    key={mode.label}
-                    type="button"
-                    onClick={() => setOverclockEnabled(mode.oc)}
-                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
-                      overclockEnabled === mode.oc
-                        ? mode.oc
-                          ? 'bg-amber-600 text-white'
-                          : 'bg-emerald-700 text-white'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center text-[11px]">
-              <span className="text-slate-300 font-semibold">
-                {powerDisplayView === 'idle'
-                  ? 'Idle Draw'
-                  : `${overclockEnabled ? 'OC' : 'Stock'} Peak`}:{' '}
-                <strong className="text-white font-mono">{displayedWatts}W</strong>
-              </span>
-              <span className="text-[10px] text-slate-400 font-mono">
-                Rec PSU:{' '}
-                {powerMetrics.recommendedPsuWatts ? `${powerMetrics.recommendedPsuWatts}W` : '--'}
-              </span>
-            </div>
-
-            <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-200 ${
-                  isOverPsuCap ? 'bg-red-500' : 'bg-blue-500'
-                }`}
-                style={{ width: `${loadPercent}%` }}
-              ></div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-1 text-[9px] text-slate-400 font-mono">
-              <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
-                <span>Idle</span>
-                <strong className="text-slate-200">{powerMetrics.idleWatts}W</strong>
-              </div>
-              <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
-                <span>Stock</span>
-                <strong className="text-emerald-300">{powerMetrics.stockPeakWatts}W</strong>
-              </div>
-              <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
-                <span>OC</span>
-                <strong className="text-amber-300">{powerMetrics.ocPeakWatts}W</strong>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-xs text-slate-400 font-bold leading-none">Total Estimate</p>
-              <p className="text-[10px] text-slate-500 mt-0.5">Cash / Direct Retail (PHP)</p>
-            </div>
-            <p className="text-lg font-black text-emerald-400 font-mono print-total">
-              {peso(totalPrice)}
-            </p>
+          <div className="text-right">
+            <h2 className="text-sm font-black text-slate-900 uppercase">OFFICIAL QUOTATION</h2>
+            <p className="text-[8pt] font-mono text-slate-600">REF: BB-{printReferenceId}</p>
+            <p className="text-[8pt] text-slate-500">Date: {printDateString}</p>
           </div>
         </div>
       </div>
-    );
-  };
+
+      <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#1f293d] pb-2 mb-2 print:hidden">
+        <div>
+          <h3 className="text-xs font-bold text-white uppercase tracking-wider leading-tight">
+            System Build
+          </h3>
+          <p className="text-[10px] text-slate-400">
+            {selectedItems.length}/8 components configured
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1">
+          {showFocusButton && selectedItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setBuildFocused(true)}
+              className="px-2 py-0.5 bg-sky-600 hover:bg-sky-500 text-white rounded text-[10px] font-bold"
+            >
+              Focus Build
+            </button>
+          )}
+          <button
+            onClick={handleSaveCurrentBuild}
+            disabled={savingBuild || selectedItems.length === 0}
+            className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
+          >
+            {savingBuild ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={handleExportQuotation}
+            disabled={exportingQuote || selectedItems.length === 0}
+            className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[10px] font-bold disabled:opacity-40"
+            title="Download quotation file & log to database"
+          >
+            {exportingQuote ? 'Exporting...' : 'Export'}
+          </button>
+          <button
+            onClick={() => window.print()}
+            disabled={selectedItems.length === 0}
+            className="px-2 py-0.5 bg-blue-700 hover:bg-blue-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
+          >
+            Print
+          </button>
+          <button
+            onClick={handleClearBuild}
+            className="px-1.5 py-0.5 text-slate-400 hover:text-white text-[10px]"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-1 print-table-wrapper">
+        {slotManifestRows.map((row) => {
+          const {
+            category,
+            shortLabel,
+            item,
+            isMemory,
+            isPsu,
+            isUnverified,
+            ramInfo,
+            psuTier,
+            priceLabel,
+          } = row;
+          const printRowClass = !item ? 'print:hidden' : '';
+
+          return (
+            <div
+              key={category}
+              className={`px-2 py-1 rounded border border-[#1f293d] bg-[#0b0f19] flex items-center justify-between gap-2 text-left print-table-row ${printRowClass}`}
+            >
+              <div className="min-w-0 flex-1 flex items-center gap-1.5 print-cell-name">
+                <span className="text-[9px] font-bold text-slate-400 uppercase shrink-0 w-12">
+                  {shortLabel}
+                </span>
+
+                <p className="text-[11px] font-semibold text-white truncate">
+                  {item ? (
+                    item.name
+                  ) : (
+                    <span className="text-slate-600 italic">Unassigned</span>
+                  )}
+                  {ramInfo && (
+                    <span className="text-blue-300 font-medium">
+                      {' '}
+                      · {ramInfo.stickCount}x {ramInfo.perStickCapacity || ''}GB
+                    </span>
+                  )}
+                </p>
+
+                {isUnverified && (
+                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-700/50 shrink-0 print:hidden">
+                    unverified
+                  </span>
+                )}
+
+                {isPsu && psuTier && (
+                  <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800/40 shrink-0 print:hidden">
+                    T-{psuTier}
+                  </span>
+                )}
+
+                {isMemory && item && (
+                  <div className="flex items-center gap-0.5 bg-[#111827] px-1 rounded shrink-0 print:hidden">
+                    {[1, 2, 4].map((count) => (
+                      <button
+                        key={count}
+                        onClick={() => setSelectedRamCount(count)}
+                        disabled={ramInfo?.isKit && count < 2}
+                        className={`px-1 text-[8px] font-bold rounded disabled:opacity-30 ${
+                          selectedRamCount === count
+                            ? 'bg-blue-600 text-white'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {count}x
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0 print-cell-price">
+                <span className="text-[11px] font-mono font-bold text-slate-200 print-price">
+                  {priceLabel}
+                </span>
+                {item && (
+                  <button
+                    onClick={() =>
+                      setSelectedBuild((prev) => ({ ...prev, [category]: null }))
+                    }
+                    className="text-slate-500 hover:text-red-400 font-bold text-xs leading-none print:hidden"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-2.5 pt-2 border-t border-[#1f293d] print-summary-box">
+        <div className="mb-2 p-2 rounded bg-[#0b0f19] border border-[#1f293d] space-y-1.5 print:hidden">
+          <div className="flex flex-wrap items-center justify-between gap-1">
+            <div className="flex items-center gap-1 bg-[#111827] p-0.5 rounded border border-[#1f293d]">
+              {[
+                { id: 'idle', label: 'Idle' },
+                { id: 'load', label: 'Peak Load' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setPowerDisplayView(tab.id)}
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
+                    powerDisplayView === tab.id
+                      ? 'bg-blue-600 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-1 bg-[#111827] p-0.5 rounded border border-[#1f293d]">
+              {[
+                { oc: false, label: 'Stock' },
+                { oc: true, label: 'Overclocked' },
+              ].map((mode) => (
+                <button
+                  key={mode.label}
+                  type="button"
+                  onClick={() => setOverclockEnabled(mode.oc)}
+                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
+                    overclockEnabled === mode.oc
+                      ? mode.oc
+                        ? 'bg-amber-600 text-white'
+                        : 'bg-emerald-700 text-white'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-between items-center text-[11px]">
+            <span className="text-slate-300 font-semibold">
+              {powerDisplaySummary.modeLabel}:{' '}
+              <strong className="text-white font-mono">
+                {powerDisplaySummary.displayedWatts}W
+              </strong>
+            </span>
+            <span className="text-[10px] text-slate-400 font-mono">
+              Rec PSU:{' '}
+              {powerDisplaySummary.recommendedPsuWatts
+                ? `${powerDisplaySummary.recommendedPsuWatts}W`
+                : '--'}
+            </span>
+          </div>
+
+          <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full transition-all duration-200 ${
+                powerDisplaySummary.isOverPsuCap ? 'bg-red-500' : 'bg-blue-500'
+              }`}
+              style={{ width: `${powerDisplaySummary.loadPercent}%` }}
+            ></div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1 text-[9px] text-slate-400 font-mono">
+            <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
+              <span>Idle</span>
+              <strong className="text-slate-200">{powerDisplaySummary.idleWatts}W</strong>
+            </div>
+            <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
+              <span>Stock</span>
+              <strong className="text-emerald-300">{powerDisplaySummary.stockPeakWatts}W</strong>
+            </div>
+            <div className="bg-[#111827] px-1.5 py-0.5 rounded flex justify-between">
+              <span>OC</span>
+              <strong className="text-amber-300">{powerDisplaySummary.ocPeakWatts}W</strong>
+            </div>
+          </div>
+
+          {powerDisplaySummary.missingSpecs.length > 0 && (
+            <div className="p-2 rounded bg-amber-950/60 border border-amber-700/50 text-[10px] text-amber-200 leading-snug text-left">
+              Power estimate incomplete:{' '}
+              {powerDisplaySummary.missingSpecs.map((m) => m.name).join(', ')} have no wattage data.
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-between items-center">
+          <div>
+            <p className="text-xs text-slate-400 font-bold leading-none">Total Estimate</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">Cash / Direct Retail (PHP)</p>
+          </div>
+          <p className="text-lg font-black text-emerald-400 font-mono print-total">
+            {peso(totalPrice)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 
   const renderRecommendationPanel = () => (
     <div className="space-y-3">
+      {Array.isArray(powerMetrics.missingSpecs) && powerMetrics.missingSpecs.length > 0 && (
+        <div className="p-2.5 rounded-lg bg-amber-950/60 border border-amber-700/50 text-xs text-amber-200 text-left">
+          Power estimate incomplete:{' '}
+          {powerMetrics.missingSpecs.map((m) => m.name).join(', ')} have no wattage data.
+        </div>
+      )}
+
       <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5">
-        <div className="flex justify-between text-xs font-bold mb-1.5">
+        <div className="flex justify-between items-center gap-2 text-xs font-bold mb-1.5">
           <span className="text-slate-400 uppercase tracking-wider text-[10px]">
             Compatibility Score
           </span>
           <span
             className={
-              compatibilityScore >= 90
+              compatibilityScore === null
+                ? 'text-slate-400'
+                : compatibilityScore >= 90
                 ? 'text-emerald-400'
                 : compatibilityScore >= 70
                 ? 'text-amber-400'
                 : 'text-red-400'
             }
           >
-            {compatibilityScore}%
+            {compatibilityScore === null
+              ? 'Score: not enough data'
+              : `Score ${compatibilityScore}% - ${verificationCoverage.verified}/${verificationCoverage.total} verified`}
           </span>
         </div>
         <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
           <div
             className={`h-full transition-all duration-300 ${
-              compatibilityScore >= 90
+              compatibilityScore === null
+                ? 'bg-slate-600'
+                : compatibilityScore >= 90
                 ? 'bg-emerald-500'
                 : compatibilityScore >= 70
                 ? 'bg-amber-500'
                 : 'bg-red-500'
             }`}
-            style={{ width: `${compatibilityScore}%` }}
+            style={{ width: `${compatibilityScore ?? 0}%` }}
           ></div>
         </div>
       </div>
@@ -2925,14 +2491,18 @@ export default function App() {
             </span>
             <span
               className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                compatibilityScore >= 90
+                compatibilityScore === null
+                  ? 'bg-slate-800 text-slate-300 border border-slate-700'
+                  : compatibilityScore >= 90
                   ? 'bg-emerald-950 text-emerald-400 border border-emerald-700/40'
                   : compatibilityScore >= 70
                   ? 'bg-amber-950 text-amber-400 border border-amber-700/40'
                   : 'bg-red-950 text-red-400 border border-red-700/40'
               }`}
             >
-              DSS: {compatibilityScore}%
+              {compatibilityScore === null
+                ? 'Score: not enough data'
+                : `Score ${compatibilityScore}%`}
             </span>
           </div>
           <p className="text-lg font-black text-emerald-400 font-mono leading-tight mt-0.5">
@@ -2954,6 +2524,11 @@ export default function App() {
   const renderMobileManifestDrawer = () => {
     if (!showMobileDrawer) return null;
 
+    const drawerScoreLabel =
+      compatibilityScore === null
+        ? 'Score: not enough data'
+        : `Score ${compatibilityScore}% - ${verificationCoverage.verified}/${verificationCoverage.total} verified`;
+
     return (
       <div className="lg:hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-[90] flex flex-col justify-end print:hidden">
         <div className="bg-[#0b0f19] border-t border-[#1f293d] rounded-t-2xl max-h-[85vh] flex flex-col shadow-2xl">
@@ -2963,7 +2538,7 @@ export default function App() {
                 Live Build & DSS Diagnostics
               </span>
               <h3 className="text-sm font-black text-white">
-                System Build ({selectedItems.length}/8) · Score: {compatibilityScore}%
+                System Build ({selectedItems.length}/8) · {drawerScoreLabel}
               </h3>
             </div>
             <button
@@ -3146,6 +2721,11 @@ export default function App() {
   };
 
   const renderBuilderPage = () => {
+    const focusScoreLabel =
+      compatibilityScore === null
+        ? 'Score: not enough data'
+        : `Score ${compatibilityScore}% - ${verificationCoverage.verified}/${verificationCoverage.total} verified`;
+
     if (buildFocused) {
       return (
         <section
@@ -3159,7 +2739,7 @@ export default function App() {
                 Build Focus Mode · Side Panel & Catalog Collapsed
               </span>
               <h2 className="text-sm font-black text-white">
-                {selectedItems.length}/8 Components Selected · Score: {compatibilityScore}% · Total:{' '}
+                {selectedItems.length}/8 Components Selected · {focusScoreLabel} · Total:{' '}
                 {peso(totalPrice)}
               </h2>
             </div>
@@ -3280,7 +2860,7 @@ export default function App() {
             {CATEGORIES.map((cat) => {
               const item = existingPc[cat];
               const isMemory = cat === 'Memory';
-              const isCustomOwned = Boolean(item && (item.unverified || item.isCustomInput));
+              const isCustomOwned = isCustomPartItem(item);
 
               return (
                 <div
@@ -3404,18 +2984,9 @@ export default function App() {
         ? PREORDER_TABLE
         : ACTIVE_TABLE;
 
-    const filteredAdminItems = currentAdminDataset.filter((item) => {
-      const matchesCat =
-        adminCategoryFilter === 'All' ||
-        normalizeText(item.category) === normalizeText(adminCategoryFilter);
-      const q = normalizeText(adminSearch);
-      const matchesSearch =
-        q === '' ||
-        normalizeText(item.name).includes(q) ||
-        normalizeText(item.brand).includes(q) ||
-        normalizeText(item.socket).includes(q) ||
-        normalizeText(item.psu_tier).includes(q);
-      return matchesCat && matchesSearch;
+    const filteredAdminItems = filterAdminRecords(currentAdminDataset, {
+      categoryFilter: adminCategoryFilter,
+      searchQuery: adminSearch,
     });
 
     return (
@@ -3931,7 +3502,9 @@ export default function App() {
                         </p>
                         <p className="text-[11px] text-slate-500">
                           {new Date(q.created_at).toLocaleString()} · Compatibility:{' '}
-                          {q.compatibility_score}%
+                          {q.compatibility_score === null || q.compatibility_score === undefined
+                            ? 'Not enough data'
+                            : `${q.compatibility_score}%`}
                         </p>
                       </div>
                       <div className="text-right">
@@ -3941,9 +3514,9 @@ export default function App() {
                         <button
                           onClick={() => {
                             if (q.build_data) {
-                              const { __ramStickCount, ...buildData } = q.build_data;
-                              setSelectedBuild(buildData);
-                              setSelectedRamCount(Number(__ramStickCount) || 2);
+                              const { buildData, ramStickCount } = normalizeSavedBuildRecord(q);
+                              setSelectedBuild({ ...INITIAL_BUILD, ...buildData });
+                              setSelectedRamCount(ramStickCount);
                               setActivePage('builder');
                               setBuildFocused(true);
                             }
@@ -4154,8 +3727,8 @@ export default function App() {
         <div className="max-w-4xl mx-auto space-y-4 text-left">
           <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-5 flex justify-between items-center">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Customer Account
+              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+                Authenticated Account
               </span>
               <h3 className="text-lg font-bold text-white mt-0.5">{currentUser.email}</h3>
             </div>
@@ -4185,7 +3758,9 @@ export default function App() {
                       <p className="text-sm font-bold text-white">{b.build_name}</p>
                       <p className="text-xs text-slate-500">
                         {new Date(b.created_at).toLocaleDateString()} · Score:{' '}
-                        {b.compatibility_score}%
+                        {b.compatibility_score === null || b.compatibility_score === undefined
+                          ? 'Not enough data'
+                          : `${b.compatibility_score}%`}
                       </p>
                       <p className="text-xs font-mono font-bold text-emerald-400 mt-0.5">
                         {peso(b.total_price)}

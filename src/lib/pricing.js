@@ -1,33 +1,50 @@
+import { parseRam } from './ram.js';
+
+const normalizeText = (value) => String(value || '').trim().toLowerCase();
+
 export function isPrebundledKit(item) {
   if (!item) return false;
-  const text = `${item.name || ''} ${item.specs || ''}`.toLowerCase();
-  return (
-    /(?:^|[^a-z0-9])[24]\s*x\s*\d+/.test(text) ||
-    /\b(dual|quad)[\s-]?channel\b/.test(text) ||
-    /\bkit\b/.test(text)
-  );
-}
+  if (typeof item.is_kit === 'boolean') return item.is_kit;
+  if (typeof item.prebundled_kit === 'boolean') return item.prebundled_kit;
 
-export function getEffectiveItemPrice(category, item, ramStickCount = 1) {
-  if (!item) return 0;
-  const unitPrice = Number(item.price) || 0;
-  if (unitPrice <= 0) return 0;
-
-  if (category === 'Memory') {
-    if (isPrebundledKit(item)) {
-      return unitPrice;
-    }
-    const sticks = Math.max(1, Number(ramStickCount) || 1);
-    return unitPrice * sticks;
+  const text = `${item.name || ''} ${item.capacity || ''} ${item.specs || ''}`.toUpperCase();
+  if (
+    text.includes('KIT') ||
+    text.includes('DUAL CHANNEL') ||
+    text.includes('QUAD CHANNEL') ||
+    /(\d+)\s*(?:X|×)\s*(\d+(?:\.\d+)?)\s*GB/.test(text)
+  ) {
+    return true;
   }
 
-  return unitPrice;
+  return false;
 }
 
-export function calculateBuildTotal(buildMap, categories, ramStickCount = 1) {
-  if (!buildMap || !Array.isArray(categories)) return 0;
-  return categories.reduce(
-    (sum, cat) => sum + getEffectiveItemPrice(cat, buildMap[cat], ramStickCount),
-    0
-  );
+export function getEffectiveItemPrice(category, item, ramStickCount = 2) {
+  if (!item) return 0;
+  const basePrice = Number(item.price || 0);
+  if (basePrice <= 0) return 0;
+
+  if (normalizeText(category) === 'memory') {
+    const parsed = parseRam(item, ramStickCount);
+    if (parsed.isKit) {
+      return basePrice;
+    }
+    const sticks = Math.max(1, Number(ramStickCount) || 1);
+    return basePrice * sticks;
+  }
+
+  return basePrice;
+}
+
+export function calculateBuildTotal(build = {}, categories = [], ramStickCount = 2) {
+  const categoryList = Array.isArray(categories) && categories.length > 0
+    ? categories
+    : Object.keys(build || {});
+
+  return categoryList.reduce((sum, category) => {
+    const item = build?.[category];
+    if (!item) return sum;
+    return sum + getEffectiveItemPrice(category, item, ramStickCount);
+  }, 0);
 }

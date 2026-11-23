@@ -22,7 +22,7 @@ export const CATEGORY_LABELS = {
 
 export const RAM_STICK_COUNTS = [1, 2, 4];
 
-// TODO: cite source — internal catalog tier mapping (1=entry, 2=mainstream, 3=upper-mid, 4=enthusiast, 5=flagship)
+// ASSUMPTION (project-calibrated, not from a published source): internal catalog tier mapping (1=entry, 2=mainstream, 3=upper-mid, 4=enthusiast, 5=flagship)
 export const TIER_THRESHOLDS = {
   cpuHighTdpWatts: 125,
   cpuMidTdpWatts: 65,
@@ -30,7 +30,7 @@ export const TIER_THRESHOLDS = {
   gpuMidWatts: 130,
 };
 
-// TODO: cite source — default workload weight allocations (percentages sum to 100 per profile)
+// ASSUMPTION (project-calibrated, not from a published source): default workload weight allocations (percentages sum to 100 per profile)
 export const WORKLOAD_WEIGHTS = {
   Gaming: {
     Processors: 21,
@@ -74,24 +74,26 @@ export const WORKLOAD_WEIGHTS = {
   },
 };
 
-// TODO: cite source — bottleneck balance tolerance (tier difference <= 1 treated as balanced)
+// ASSUMPTION (project-calibrated, not from a published source): bottleneck balance tolerance (tier difference <= 1 treated as balanced)
 export const BOTTLENECK_CONFIG = {
   balancedMaxTierDelta: 1,
 };
 
-// Power draw & headroom constants (headroom/multipliers align with PSU calculator guidance; per-part base numbers marked TODO where locally calibrated)
+// Power draw & headroom constants (all non-database figures labeled ASSUMPTION)
 export const POWER_CONFIG = {
-  motherboardBaseWatts: 45, // TODO: cite source (general VRM/chipset allowance; notes 50-80W typical)
-  perRamStickWatts: 4, // TODO: cite source (per-DIMM estimate; notes 10-15W per 16GB)
-  storageDriveWatts: 6, // TODO: cite source (per NVMe/SATA drive estimate)
-  airCoolerWatts: 6, // notes 5-10W for air coolers
-  aioCoolerWatts: 18, // notes 10-30W for AIO pumps/fans
-  caseFansWatts: 12, // TODO: cite source (case fan allowance; notes 20-50W with RGB)
-  defaultCpuTdpWatts: 65, // TODO: cite source (default fallback when CPU TDP is missing)
+  motherboardBaseWatts: 45, // ASSUMPTION (project-calibrated, not from a published source): motherboard VRM/chipset allowance
+  perRamStickWatts: 4, // ASSUMPTION (project-calibrated, not from a published source): per-DIMM wattage allowance
+  storageDriveWatts: 6, // ASSUMPTION (project-calibrated, not from a published source): per storage drive wattage allowance
+  airCoolerWatts: 6, // ASSUMPTION (project-calibrated, not from a published source): air cooler fan allowance
+  aioCoolerWatts: 18, // ASSUMPTION (project-calibrated, not from a published source): AIO pump and fan allowance
+  caseFansWatts: 12, // ASSUMPTION (project-calibrated, not from a published source): chassis fan allowance
+  defaultCpuTdpWatts: 65, // ASSUMPTION (project-calibrated, not from a published source): fallback TDP when CPU TDP is missing
+  cpuPeakTdpMultiplier: 1.35, // ASSUMPTION (project-calibrated, not from a published source): peak boost draw multiplier when peak_watts is not set
   defaultGpuWatts: 0,
-  idleRatio: 0.18, // TODO: cite source (estimated idle fraction of active load)
-  overclockPeakMultiplier: 1.15, // notes +15% CPU overclocking allowance
-  psuHeadroomMultiplier: 1.25, // 25% headroom multiplier for transient spikes/efficiency curve
+  idleRatio: 0.18, // ASSUMPTION (project-calibrated, not from a published source): estimated idle fraction of active load
+  overclockPeakMultiplier: 1.15, // ASSUMPTION (project-calibrated, not from a published source): +15% overclocked peak allowance
+  psuHeadroomMultiplier: 1.25, // ASSUMPTION (project-calibrated, not from a published source): 25% headroom multiplier for transient spikes and efficiency curve
+  defaultBufferWatts: 120, // ASSUMPTION (project-calibrated, not from a published source): default additive buffer when admin rule buffer is omitted
   psuStepWatts: 50,
   minRecommendedPsuWatts: 450,
 };
