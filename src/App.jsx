@@ -4747,7 +4747,7 @@ export default function App() {
                     BYTEBUILD
                   </span>
                   <span className="text-[10px] text-slate-400 font-medium block mt-0.5">
-                    PC Builder & DSS
+                    Guided PC Builder
                   </span>
                 </div>
               </button>
