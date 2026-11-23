@@ -13,7 +13,7 @@ export const RULE_DISPLAY_META = {
   },
   'RULE-STOR-01': {
     shortLabel: 'Storage Baseline',
-    whyItMatters: 'Checks that primary storage has enough capacity for the OS, apps, and games.',
+    whyItMatters: 'Checks combined SSD and Hard Drive capacity for OS, apps, games, and media.',
   },
   'RULE-GPU-LEN-01': {
     shortLabel: 'GPU Clearance',
@@ -41,11 +41,11 @@ export const RULE_DISPLAY_META = {
   },
   'RULE-RAM-LIM-01': {
     shortLabel: 'RAM Capacity & Speed',
-    whyItMatters: 'Ensures total memory size and speed stay within motherboard limits.',
+    whyItMatters: 'Confirms at least 16GB capacity and speeds stay within motherboard limits.',
   },
   'RULE-IGPU-01': {
     shortLabel: 'Display Output',
-    whyItMatters: 'Confirms the system has either integrated graphics or a dedicated GPU for video.',
+    whyItMatters: 'Flags missing display output only when the CPU lacks iGPU and no GPU is added.',
   },
 };
 
@@ -63,8 +63,17 @@ export function getRuleChipMeta(rule = {}) {
   const label = meta.shortLabel || rule.title || rule.ruleId || 'Rule';
   const whyItMatters = meta.whyItMatters || '';
 
+  const isGreenBalancedRule =
+    rule.status === 'pass' &&
+    !rule.unverified &&
+    ((rule.ruleId === 'RULE-RAM-LIM-01' && Number(rule.ramCapacityGb ?? 16) >= 16) ||
+      rule.ruleId === 'RULE-IGPU-01' ||
+      (rule.ruleId === 'RULE-STOR-01' && Boolean(rule.hasBalancedHdd)));
+
   let dotClass = 'bg-slate-400';
-  if (rule.status === 'pass' && rule.dataSource === 'estimated') {
+  if (isGreenBalancedRule) {
+    dotClass = 'bg-emerald-400';
+  } else if (rule.status === 'pass' && rule.dataSource === 'estimated') {
     dotClass = 'bg-amber-400';
   } else if (rule.status === 'pass') {
     dotClass = 'bg-emerald-400';
@@ -74,11 +83,15 @@ export function getRuleChipMeta(rule = {}) {
     dotClass = 'bg-amber-400';
   }
 
+  const badgeLabel = isGreenBalancedRule
+    ? 'Verified'
+    : getStatusBadgeLabel(rule.status, rule.unverified, rule.dataSource);
+
   return {
     ruleId: rule.ruleId,
     label,
     whyItMatters,
     dotClass,
-    badgeLabel: getStatusBadgeLabel(rule.status, rule.unverified, rule.dataSource),
+    badgeLabel,
   };
 }

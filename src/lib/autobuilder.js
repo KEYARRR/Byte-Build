@@ -6,18 +6,66 @@ import { parseRam } from './ram.js';
 const MIN_BUDGET = 15000;
 const normalizeText = (value) => String(value || '').trim().toLowerCase();
 
+const PROFILE_SHARES = {
+  Gaming: {
+    'Video Cards': 0.29,
+    Processors: 0.20,
+    Motherboards: 0.13,
+    Memory: 0.09,
+    Storage: 0.08,
+    'Hard Drives': 0.04,
+    'Power Supplies': 0.07,
+    Cases: 0.06,
+    'CPU Coolers': 0.04,
+  },
+  'Content Creation': {
+    Processors: 0.23,
+    'Video Cards': 0.21,
+    Motherboards: 0.13,
+    Memory: 0.11,
+    Storage: 0.10,
+    'Hard Drives': 0.07,
+    'Power Supplies': 0.07,
+    Cases: 0.04,
+    'CPU Coolers': 0.04,
+  },
+  'Office/Productivity': {
+    Processors: 0.21,
+    Motherboards: 0.14,
+    Memory: 0.11,
+    Storage: 0.11,
+    'Hard Drives': 0.08,
+    'Power Supplies': 0.09,
+    Cases: 0.08,
+    'CPU Coolers': 0.05,
+    'Video Cards': 0.13,
+  },
+  Balanced: {
+    'Video Cards': 0.25,
+    Processors: 0.20,
+    Motherboards: 0.13,
+    Memory: 0.10,
+    Storage: 0.09,
+    'Hard Drives': 0.05,
+    'Power Supplies': 0.07,
+    Cases: 0.06,
+    'CPU Coolers': 0.05,
+  },
+};
+
 function matchesCategory(product, targetCategory) {
   const cat = normalizeText(product?.category);
   const target = normalizeText(targetCategory);
   if (!cat) return false;
   if (cat === target) return true;
-  if (target === 'memory' && (cat.includes('ram') || cat.includes('memory'))) return true;
-  if (
-    target === 'storage' &&
-    (cat.includes('ssd') || cat.includes('nvme') || cat.includes('storage') || cat.includes('hdd'))
-  ) {
-    return true;
+  if (target === 'hard drives') {
+    return cat.includes('hdd') || cat.includes('hard drive') || cat.includes('hard disk');
   }
+  if (target === 'storage') {
+    if (cat.includes('hdd') || cat.includes('hard drive') || cat.includes('hard disk')) return false;
+    return cat.includes('ssd') || cat.includes('nvme') || cat.includes('storage');
+  }
+  if (target === 'memory' && (cat.includes('ram') || cat.includes('memory'))) return true;
   if (
     target === 'video cards' &&
     (cat.includes('gpu') || cat.includes('graphics') || cat.includes('video'))
@@ -42,12 +90,22 @@ function matchesCategory(product, targetCategory) {
   return false;
 }
 
+function resolveRamStickCount(product) {
+  if (isPrebundledKit(product)) return 2;
+  const parsed = parseRam(product, 2);
+  if (parsed?.stickCount === 1 || parsed?.stickCount === 2 || parsed?.stickCount === 4) {
+    return parsed.stickCount;
+  }
+  return 2;
+}
+
 function getStockPrice(product, category, ramStickCount = 2) {
   if (!product) return Infinity;
   const base = Number(product.price);
   if (!Number.isFinite(base) || base <= 0) return Infinity;
   if (category === 'Memory') {
-    const eff = getEffectiveItemPrice('Memory', product, ramStickCount);
+    const count = isPrebundledKit(product) ? 2 : ramStickCount;
+    const eff = getEffectiveItemPrice('Memory', product, count);
     return Number.isFinite(eff) && eff > 0 ? eff : base;
   }
   return base;
@@ -61,33 +119,106 @@ function detectMemoryGen(part) {
   return '';
 }
 
-function pickCompatiblePair(cpus, mobos, remainingBudget, profile) {
+function getCheapestCandidatePrice(candidates, category, mobo = null) {
+  let pool = (candidates || []).filter((item) => {
+    const sticks = category === 'Memory' ? resolveRamStickCount(item) : 1;
+    return Number.isFinite(getStockPrice(item, category, sticks));
+  });
+
+  if (category === 'Memory' && mobo) {
+    const moboDdr = detectMemoryGen(mobo);
+    if (moboDdr) {
+      const ddrMatches = pool.filter((ram) => {
+        const ramDdr = detectMemoryGen(ram);
+        return !ramDdr || ramDdr === moboDdr;
+      });
+      if (ddrMatches.length > 0) pool = ddrMatches;
+    }
+  }
+
+  if (pool.length === 0) return Infinity;
+  return Math.min(
+    ...pool.map((item) => {
+      const sticks = category === 'Memory' ? resolveRamStickCount(item) : 1;
+      return getStockPrice(item, category, sticks);
+    })
+  );
+}
+
+function getMinCostForSlots(byCat, categoriesToFill, mobo) {
+  let totalMin = 0;
+  for (const cat of categoriesToFill) {
+    const cheapest = getCheapestCandidatePrice(byCat[cat], cat, mobo);
+    if (!Number.isFinite(cheapest)) return Infinity;
+    totalMin += cheapest;
+  }
+  return totalMin;
+}
+
+function scorePair(cpu, mobo, budget, profile) {
+  const shares = PROFILE_SHARES[profile] || PROFILE_SHARES.Balanced;
+  const targetCpuSpend = budget * (shares.Processors || 0.2);
+  const targetMoboSpend = budget * (shares.Motherboards || 0.13);
+  const cpuPrice = getStockPrice(cpu, 'Processors');
+  const moboPrice = getStockPrice(mobo, 'Motherboards');
+  const cpuScore = Number(cpu.hardware_score || 75);
+  const moboScore = Number(mobo.hardware_score || 75);
+
+  const cpuFit = 1 - Math.min(1, Math.abs(cpuPrice - targetCpuSpend) / Math.max(1, targetCpuSpend));
+  const moboFit = 1 - Math.min(1, Math.abs(moboPrice - targetMoboSpend) / Math.max(1, targetMoboSpend));
+  const baseQuality =
+    profile === 'Content Creation' ? cpuScore * 1.2 + moboScore * 0.8 : cpuScore + moboScore;
+
+  return baseQuality * (0.65 + 0.35 * ((cpuFit + moboFit) / 2));
+}
+
+function pickCompatiblePair(cpus, mobos, byCat, budget, profile) {
+  const allRemaining = [
+    'Memory',
+    'Storage',
+    'Hard Drives',
+    'Video Cards',
+    'Power Supplies',
+    'CPU Coolers',
+    'Cases',
+  ];
   const pairs = [];
+
   for (const cpu of cpus) {
     const cpuSock = detectCpuSocket(cpu);
+    const cpuPrice = getStockPrice(cpu, 'Processors');
+    if (!Number.isFinite(cpuPrice) || cpuPrice > budget) continue;
+
     for (const mobo of mobos) {
       const moboSock = detectMotherboardSocket(mobo);
       if (cpuSock && moboSock && cpuSock !== moboSock) continue;
       if ((cpuSock && !moboSock) || (!cpuSock && moboSock)) continue;
 
-      const cpuPrice = getStockPrice(cpu, 'Processors');
       const moboPrice = getStockPrice(mobo, 'Motherboards');
-      if (!Number.isFinite(cpuPrice) || !Number.isFinite(moboPrice)) continue;
+      if (!Number.isFinite(moboPrice)) continue;
 
       const pairCost = cpuPrice + moboPrice;
-      const cpuScore = Number(cpu.hardware_score || 75);
-      const moboScore = Number(mobo.hardware_score || 75);
-      const score =
-        profile === 'Content Creation' ? cpuScore * 1.3 + moboScore * 0.8 : cpuScore + moboScore;
+      if (pairCost > budget) continue;
 
-      pairs.push({ cpu, mobo, cpuSock, moboSock, pairCost, score });
+      const minOthers = getMinCostForSlots(byCat, allRemaining, mobo);
+      const fitsFullRig = Number.isFinite(minOthers) && pairCost + minOthers <= budget;
+
+      pairs.push({
+        cpu,
+        mobo,
+        cpuSock,
+        moboSock,
+        pairCost,
+        fitsFullRig,
+        score: scorePair(cpu, mobo, budget, profile),
+      });
     }
   }
 
   if (pairs.length === 0) return null;
 
-  const fitting = pairs.filter((p) => p.pairCost <= remainingBudget);
-  const pool = fitting.length > 0 ? fitting : pairs;
+  const fullRigPairs = pairs.filter((p) => p.fitsFullRig);
+  const pool = fullRigPairs.length > 0 ? fullRigPairs : pairs;
 
   if (profile === 'Office/Productivity') {
     pool.sort((a, b) => a.pairCost - b.pairCost || b.score - a.score);
@@ -98,107 +229,98 @@ function pickCompatiblePair(cpus, mobos, remainingBudget, profile) {
   return pool[0];
 }
 
-function pickMemoryForBudget(ramCandidates, mobo, remainingBudget, profile) {
-  const moboDdr = detectMemoryGen(mobo);
-  const compatible = ramCandidates.filter((ram) => {
-    const ramDdr = detectMemoryGen(ram);
-    if (moboDdr && ramDdr && moboDdr !== ramDdr) return false;
-    return true;
-  });
+function pickPartForSlot({
+  candidates,
+  category,
+  mobo,
+  budget,
+  spentSoFar,
+  remainingSlotsAfterThis,
+  byCat,
+  profile,
+}) {
+  if (!candidates || candidates.length === 0) return { item: null, stickCount: 1, price: 0 };
 
-  const pool = compatible.length > 0 ? compatible : ramCandidates;
-  if (pool.length === 0) return { item: null, stickCount: 2, price: 0 };
+  const remainingBudget = budget - spentSoFar;
+  if (remainingBudget <= 0) return { item: null, stickCount: 1, price: 0 };
 
-  const scored = pool
-    .map((item) => {
-      const stickCount = 2;
-      const parsed = parseRam(item, stickCount);
-      const price = getStockPrice(item, 'Memory', stickCount);
-      const gb = Number(parsed.totalCapacity || 0);
-      const targetGb = profile === 'Content Creation' ? 32 : 16;
-      const gbFit = gb >= targetGb ? 20 : gb >= 16 ? 12 : gb > 0 ? 5 : 0;
-      const ddrBonus = moboDdr && detectMemoryGen(item) === moboDdr ? 15 : 0;
-      const score = Number(item.hardware_score || 70) + gbFit + ddrBonus;
-      return { item, stickCount, price, score };
-    })
-    .filter((entry) => Number.isFinite(entry.price));
+  const minCostAfterThis = getMinCostForSlots(byCat, remainingSlotsAfterThis, mobo);
+  const safeMinAfter = Number.isFinite(minCostAfterThis) ? minCostAfterThis : 0;
+  const maxAllowedPrice = remainingBudget - safeMinAfter;
 
-  const fitting = scored.filter((entry) => entry.price <= remainingBudget);
-  if (fitting.length > 0) {
-    fitting.sort((a, b) => b.score - a.score || a.price - b.price);
-    return fitting[0];
+  const shares = PROFILE_SHARES[profile] || PROFILE_SHARES.Balanced;
+  const idealSlotPrice = budget * (shares[category] || 0.08);
+  const moboDdr = category === 'Memory' ? detectMemoryGen(mobo) : '';
+
+  let filtered = candidates;
+  if (category === 'Memory' && moboDdr) {
+    const ddrMatches = candidates.filter((ram) => {
+      const ramDdr = detectMemoryGen(ram);
+      return !ramDdr || ramDdr === moboDdr;
+    });
+    if (ddrMatches.length > 0) filtered = ddrMatches;
   }
 
-  scored.sort((a, b) => a.price - b.price);
-  return scored[0] || { item: null, stickCount: 2, price: 0 };
-}
-
-function pickStorageForBudget(storageCandidates, remainingBudget, profile) {
-  if (storageCandidates.length === 0) return { item: null, price: 0 };
-
-  const scored = storageCandidates
+  const evaluated = filtered
     .map((item) => {
-      const price = getStockPrice(item, 'Storage');
-      const specText = `${item.name || ''} ${item.specs || ''}`;
-      const is1TbPlus = /\b(1TB|2TB|4TB|1000GB|2000GB)\b/i.test(specText);
-      const isNvme = /\b(NVMe|M\.2|PCIe)\b/i.test(specText);
-      const bonus =
-        (isNvme ? 12 : 0) +
-        (profile === 'Content Creation' && is1TbPlus ? 18 : is1TbPlus ? 10 : 4);
-      return {
-        item,
-        price,
-        score: Number(item.hardware_score || 70) + bonus,
-      };
-    })
-    .filter((entry) => Number.isFinite(entry.price));
+      const stickCount = category === 'Memory' ? resolveRamStickCount(item) : 1;
+      const price = getStockPrice(item, category, stickCount);
+      if (!Number.isFinite(price)) return null;
 
-  const fitting = scored.filter((entry) => entry.price <= remainingBudget);
-  if (fitting.length > 0) {
-    fitting.sort((a, b) => b.score - a.score || a.price - b.price);
-    return fitting[0];
-  }
-
-  scored.sort((a, b) => a.price - b.price);
-  return scored[0] || { item: null, price: 0 };
-}
-
-function pickStandardPartForBudget(candidates, category, remainingBudget, profile) {
-  if (!candidates || candidates.length === 0) return { item: null, price: 0 };
-
-  const scored = candidates
-    .map((item) => {
-      const price = getStockPrice(item, category);
+      const fitsWithRemainingSlots = price <= maxAllowedPrice;
+      const fitsRemainingBudget = price <= remainingBudget;
       const hwScore = Number(item.hardware_score || 75);
-      let weight = hwScore;
-      if (category === 'Video Cards') {
-        weight =
-          profile === 'Gaming'
-            ? hwScore * 1.4
-            : profile === 'Office/Productivity'
-            ? hwScore * 0.6
-            : hwScore;
+      const specText = `${item.name || ''} ${item.specs || ''}`;
+
+      let bonus = 0;
+      if (category === 'Storage') {
+        const is500GbPlus = /\b(500GB|512GB|1TB|2TB|4TB|1000GB|2000GB)\b/i.test(specText);
+        const is1TbPlus = /\b(1TB|2TB|4TB|1000GB|2000GB)\b/i.test(specText);
+        const isNvme = /\b(NVMe|M\.2|PCIe)\b/i.test(specText);
+        bonus = (is500GbPlus ? 18 : -10) + (is1TbPlus ? 10 : 0) + (isNvme ? 8 : 0);
+      } else if (category === 'Hard Drives') {
+        const is1TbPlus = /\b(1TB|2TB|4TB|6TB|8TB|1000GB|2000GB|4000GB)\b/i.test(specText);
+        const is2TbPlus = /\b(2TB|4TB|6TB|8TB|2000GB|4000GB)\b/i.test(specText);
+        bonus = (is1TbPlus ? 14 : 4) + (is2TbPlus ? 8 : 0);
+      } else if (category === 'Memory') {
+        const parsed = parseRam(item, stickCount);
+        const targetGb = profile === 'Content Creation' ? 32 : 16;
+        bonus = parsed.totalCapacity >= targetGb ? 14 : parsed.totalCapacity >= 16 ? 8 : 0;
       } else if (category === 'Power Supplies') {
         const tier = String(item.psu_tier || '').toUpperCase();
-        const tierBonus = tier === 'A+' || tier === 'A' ? 14 : tier === 'B' ? 8 : 0;
-        weight = hwScore + tierBonus;
+        bonus = tier === 'A+' || tier === 'A' ? 12 : tier === 'B' ? 8 : -5;
       }
-      return { item, price, weight };
-    })
-    .filter((entry) => Number.isFinite(entry.price));
 
-  const fitting = scored.filter((entry) => entry.price <= remainingBudget);
-  if (fitting.length > 0) {
-    fitting.sort((a, b) => {
-      if (profile === 'Office/Productivity' && category === 'Video Cards') {
-        return a.price - b.price;
-      }
-      return b.weight - a.weight || a.price - b.price;
-    });
-    return fitting[0];
+      const closeness =
+        1 - Math.min(1, Math.abs(price - idealSlotPrice) / Math.max(1, idealSlotPrice));
+      const rankScore = hwScore * 0.65 + bonus + closeness * 30;
+
+      return {
+        item,
+        stickCount,
+        price,
+        fitsWithRemainingSlots,
+        fitsRemainingBudget,
+        rankScore,
+      };
+    })
+    .filter(Boolean);
+
+  if (evaluated.length === 0) return { item: null, stickCount: 1, price: 0 };
+
+  const fullRigEligible = evaluated.filter((e) => e.fitsWithRemainingSlots);
+  if (fullRigEligible.length > 0) {
+    fullRigEligible.sort((a, b) => b.rankScore - a.rankScore || a.price - b.price);
+    return fullRigEligible[0];
   }
 
-  return { item: null, price: 0 };
+  const budgetEligible = evaluated.filter((e) => e.fitsRemainingBudget);
+  if (budgetEligible.length > 0) {
+    budgetEligible.sort((a, b) => a.price - b.price || b.rankScore - a.rankScore);
+    return budgetEligible[0];
+  }
+
+  return { item: null, stickCount: 1, price: 0 };
 }
 
 export function runSmartBuildAssistant({
@@ -228,7 +350,7 @@ export function runSmartBuildAssistant({
     return acc;
   }, {});
 
-  const pair = pickCompatiblePair(byCat.Processors, byCat.Motherboards, budget, profile);
+  const pair = pickCompatiblePair(byCat.Processors, byCat.Motherboards, byCat, budget, profile);
   if (!pair) {
     return {
       ok: false,
@@ -249,53 +371,40 @@ export function runSmartBuildAssistant({
   build.Motherboards = pair.mobo;
 
   let spent = pair.pairCost;
+  let ramStickCount = 2;
   const notes = [];
   if (pair.cpuSock) {
     notes.push(`Matched socket ${pair.cpuSock}.`);
   }
 
-  const ramPick = pickMemoryForBudget(byCat.Memory, pair.mobo, budget - spent, profile);
-  const ramStickCount = ramPick.stickCount || 2;
-  if (ramPick.item) {
-    build.Memory = ramPick.item;
-    spent += ramPick.price;
-  } else {
-    notes.push('No Memory SKU in stock.');
-  }
+  const slotOrder = [
+    'Memory',
+    'Storage',
+    'Hard Drives',
+    'Video Cards',
+    'Power Supplies',
+    'CPU Coolers',
+    'Cases',
+  ];
+  for (let i = 0; i < slotOrder.length; i++) {
+    const cat = slotOrder[i];
+    const slotsAfter = slotOrder.slice(i + 1);
+    const picked = pickPartForSlot({
+      candidates: byCat[cat],
+      category: cat,
+      mobo: pair.mobo,
+      budget,
+      spentSoFar: spent,
+      remainingSlotsAfterThis: slotsAfter,
+      byCat,
+      profile,
+    });
 
-  const storagePick = pickStorageForBudget(byCat.Storage, budget - spent, profile);
-  if (storagePick.item) {
-    build.Storage = storagePick.item;
-    spent += storagePick.price;
-  } else {
-    notes.push('No Storage SKU in stock.');
-  }
-
-  const remainingOrder = ['Video Cards', 'Power Supplies', 'CPU Coolers', 'Cases'];
-  for (const cat of remainingOrder) {
-    const picked = pickStandardPartForBudget(byCat[cat], cat, budget - spent, profile);
     if (picked.item && spent + picked.price <= budget) {
       build[cat] = picked.item;
       spent += picked.price;
-    }
-  }
-
-  const optionalOrder = ['Video Cards', 'CPU Coolers', 'Cases', 'Power Supplies'];
-  for (const cat of optionalOrder) {
-    if (spent <= budget) break;
-    if (build[cat]) {
-      const catPrice = getStockPrice(build[cat], cat);
-      const cheaper = (byCat[cat] || [])
-        .map((item) => ({ item, price: getStockPrice(item, cat) }))
-        .filter((entry) => Number.isFinite(entry.price) && spent - catPrice + entry.price <= budget)
-        .sort((a, b) => b.price - a.price)[0];
-
-      if (cheaper) {
-        spent = spent - catPrice + cheaper.price;
-        build[cat] = cheaper.item;
-      } else {
-        spent -= catPrice;
-        build[cat] = null;
+      if (cat === 'Memory') {
+        ramStickCount = picked.stickCount || 2;
       }
     }
   }
@@ -304,17 +413,14 @@ export function runSmartBuildAssistant({
   const withinBudget = totalPrice <= budget;
   const remaining = Math.max(0, Math.round(budget - totalPrice));
   const unfilledCategories = CATEGORIES.filter((cat) => !build[cat]);
+  const filledCount = CATEGORIES.length - unfilledCategories.length;
 
-  if (!withinBudget) {
-    notes.push(
-      `Core parts total ₱${totalPrice.toLocaleString()} against ₱${budget.toLocaleString()} budget.`
-    );
+  if (unfilledCategories.length > 0) {
+    notes.push(`Unfilled slots: ${unfilledCategories.join(', ')}.`);
   }
   if (overclockEnabled) {
     notes.push('Overclocking headroom mode noted.');
   }
-
-  const filledCount = CATEGORIES.length - unfilledCategories.length;
 
   return {
     ok: true,
@@ -328,7 +434,7 @@ export function runSmartBuildAssistant({
     unallocatedBudget: remaining,
     leftoverBudget: remaining,
     unfilledCategories,
-    statusMessage: `Generated ${filledCount}/8-part ${profile} build for ₱${totalPrice.toLocaleString()} (Budget: ₱${budget.toLocaleString()}).`,
+    statusMessage: `Generated ${filledCount}/${CATEGORIES.length}-part ${profile} build for ₱${totalPrice.toLocaleString()} (Budget: ₱${budget.toLocaleString()}).`,
     notes,
   };
 }

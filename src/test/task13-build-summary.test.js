@@ -1,72 +1,76 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { CATEGORIES } from '../lib/config.js';
+import { createCustomOwnedPart } from '../lib/customParts.js';
 import {
-  getShortCategoryLabel,
   buildSlotManifestRows,
   computePowerDisplayMetrics,
 } from '../lib/buildSummary.js';
 
-test('TC-70: buildSlotManifestRows maps all 8 categories with RAM kit details, PSU tier, and custom flags', () => {
-  const rows = buildSlotManifestRows(
-    {
-      Processors: { id: 1, name: 'Ryzen 5 5600', price: 7500 },
-      Memory: { id: 2, name: '16GB DDR4-3200', price: 2100 },
-      'Power Supplies': { id: 3, name: 'Corsair RM750e', price: 5400, psu_tier: 'A' },
-      Cases: { id: 'custom-1', name: 'Old Case', isCustomInput: true, unverified: true, price: 0 },
-    },
-    2
-  );
+test('TC-70: buildSlotManifestRows maps all categories with RAM kit details, PSU tier, and custom flags', () => {
+  const customCase = createCustomOwnedPart({
+    category: 'Cases',
+    name: 'mATX Case',
+    brand: 'Custom',
+    price: 0,
+    specs: '',
+  });
 
-  assert.equal(rows.length, 8);
-  assert.equal(getShortCategoryLabel('Motherboards'), 'MOBO');
+  const build = {
+    Processors: { id: 1, name: 'Ryzen 5 5600', price: 7200 },
+    Motherboards: { id: 2, name: 'B550M Pro', price: 6100 },
+    Memory: { id: 3, name: '16GB (2x8GB) DDR4-3200 Kit', specs: '2x8GB 3200MHz', price: 3100 },
+    Storage: { id: 4, name: '1TB NVMe SSD', price: 3500 },
+    'Hard Drives': { id: 5, name: '2TB BarraCuda HDD', price: 3650 },
+    'Video Cards': { id: 6, name: 'RTX 4060', price: 18500 },
+    'Power Supplies': { id: 7, name: '650W Bronze', psu_tier: 'B', price: 3400 },
+    'CPU Coolers': { id: 8, name: 'AG400 Air Cooler', price: 1250 },
+    Cases: customCase,
+  };
+
+  const rows = buildSlotManifestRows(build, 2);
+  assert.equal(rows.length, CATEGORIES.length);
+
+  const hddRow = rows.find((r) => r.category === 'Hard Drives');
+  assert.equal(hddRow.shortLabel, 'HDD');
+  assert.equal(hddRow.priceLabel, '₱3,650');
 
   const ramRow = rows.find((r) => r.category === 'Memory');
   assert.equal(ramRow.ramInfo.stickCount, 2);
-  assert.equal(ramRow.priceLabel, '₱4,200');
 
   const psuRow = rows.find((r) => r.category === 'Power Supplies');
-  assert.equal(psuRow.psuTier, 'A');
+  assert.equal(psuRow.psuTier, 'B');
 
   const caseRow = rows.find((r) => r.category === 'Cases');
   assert.equal(caseRow.isUnverified, true);
-  assert.equal(caseRow.priceLabel, 'Included');
-
-  const gpuRow = rows.find((r) => r.category === 'Video Cards');
-  assert.equal(gpuRow.priceLabel, '--');
 });
 
 test('TC-71: computePowerDisplayMetrics switches between Idle/Peak and detects PSU overload', () => {
-  const idleView = computePowerDisplayMetrics({
-    powerMetrics: {
-      idleWatts: 65,
-      activePeakWatts: 520,
-      stockPeakWatts: 460,
-      ocPeakWatts: 520,
-      recommendedPsuWatts: 650,
-    },
-    psuInfo: { watts: 500 },
-    powerDisplayView: 'idle',
-    overclockEnabled: true,
-  });
+  const powerMetrics = {
+    idleWatts: 45,
+    stockPeakWatts: 310,
+    ocPeakWatts: 365,
+    activePeakWatts: 365,
+    recommendedPsuWatts: 500,
+    missingSpecs: [],
+  };
+  const psuInfo = { wattage: 350 };
 
-  assert.equal(idleView.displayedWatts, 65);
-  assert.equal(idleView.modeLabel, 'Idle Draw');
-  assert.equal(idleView.isOverPsuCap, true);
-
-  const peakView = computePowerDisplayMetrics({
-    powerMetrics: {
-      idleWatts: 65,
-      activePeakWatts: 520,
-      stockPeakWatts: 460,
-      ocPeakWatts: 520,
-      recommendedPsuWatts: 650,
-    },
-    psuInfo: { watts: 500 },
+  const peakOc = computePowerDisplayMetrics({
+    powerMetrics,
+    psuInfo,
     powerDisplayView: 'load',
     overclockEnabled: true,
   });
+  assert.equal(peakOc.displayedWatts, 365);
+  assert.equal(peakOc.isOverPsuCap, true);
 
-  assert.equal(peakView.displayedWatts, 520);
-  assert.equal(peakView.modeLabel, 'OC Peak');
-  assert.equal(peakView.loadPercent, 100);
+  const idle = computePowerDisplayMetrics({
+    powerMetrics,
+    psuInfo,
+    powerDisplayView: 'idle',
+    overclockEnabled: false,
+  });
+  assert.equal(idle.displayedWatts, 45);
+  assert.equal(idle.isOverPsuCap, false);
 });

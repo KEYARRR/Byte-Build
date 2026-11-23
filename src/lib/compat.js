@@ -152,6 +152,18 @@ function isCustomPart(part) {
   return Boolean(part && (part.isCustomInput || part.unverified));
 }
 
+function parseDriveCapacityGb(drive) {
+  if (!drive || isCustomPart(drive)) return { gb: null, estimated: false };
+  if (drive.capacity_gb !== undefined && drive.capacity_gb !== null && drive.capacity_gb !== '') {
+    return { gb: Number(drive.capacity_gb), estimated: false };
+  }
+  const combined = `${drive.name || ''} ${drive.capacity || ''} ${drive.specs || ''}`.toUpperCase();
+  const tbM = combined.match(/(\d+(?:\.\d+)?)\s*TB/);
+  const gbM = combined.match(/(\d+)\s*GB/);
+  const gb = tbM ? Math.round(Number(tbM[1]) * 1000) : gbM ? Number(gbM[1]) : null;
+  return { gb, estimated: Boolean(gb) };
+}
+
 function normalizeFormFactor(raw) {
   const txt = String(raw || '').toUpperCase();
   if (!txt) return '';
@@ -354,6 +366,7 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
   const gpu = build['Video Cards'] || null;
   const ram = build.Memory || null;
   const storage = build.Storage || null;
+  const hardDrive = build['Hard Drives'] || null;
   const psu = build['Power Supplies'] || null;
   const cooler = build['CPU Coolers'] || null;
   const pcCase = build.Cases || null;
@@ -392,7 +405,7 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
         dataSource: sockEstimated ? 'estimated' : 'database',
         missingFields: [],
         unverified: sockUnverified,
-        message: `Socket mismatch: ${cpu.name} (${cpuSocket}) is incompatible with ${board.name} (${boardSocket}).`,
+        message: `Socket mismatch: ${cpu.name} (${cpuSocket}) is not compatible with ${board.name} (${boardSocket}).`,
         recommendation: `Choose an ${cpuSocket} motherboard or matching ${boardSocket} CPU.`,
       })
     );
@@ -558,55 +571,65 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
     }
   }
 
-  // 4. RULE-STOR-01: Primary Storage Capacity
+  // 4. RULE-STOR-01: Primary Storage + Secondary Hard Drive Capacity
   const minStorageGb = Number(ctx.minStorageGb || 500);
-  let storageGb =
-    storage?.capacity_gb !== undefined && storage?.capacity_gb !== null && storage?.capacity_gb !== ''
-      ? Number(storage.capacity_gb)
-      : null;
-  let storEstimated = false;
-  if (!storageGb && storage && !isCustomPart(storage)) {
-    const combinedStor = `${storage.name || ''} ${storage.capacity || ''} ${storage.specs || ''}`.toUpperCase();
-    const tbM = combinedStor.match(/(\d+(?:\.\d+)?)\s*TB/);
-    const gbM = combinedStor.match(/(\d+)\s*GB/);
-    storageGb = tbM ? Math.round(Number(tbM[1]) * 1000) : gbM ? Number(gbM[1]) : null;
-    if (storageGb) storEstimated = true;
-  }
-  const storUnverified = isCustomPart(storage);
-  if (!storage || !storageGb) {
+  const ssdInfo = parseDriveCapacityGb(storage);
+  const hddInfo = parseDriveCapacityGb(hardDrive);
+  const storEstimated = Boolean(ssdInfo.estimated || hddInfo.estimated);
+  const storUnverified = isCustomPart(storage) || isCustomPart(hardDrive);
+
+  const hasAnyDrive = Boolean(storage || hardDrive);
+  const totalStorageGb = (ssdInfo.gb || 0) + (hddInfo.gb || 0);
+  const hasKnownCapacity = ssdInfo.gb !== null || hddInfo.gb !== null;
+
+  if (!hasAnyDrive || !hasKnownCapacity) {
     results.push({
       ruleId: 'RULE-STOR-01',
       category: 'Storage',
-      title: 'Primary Storage Baseline',
+      title: 'Storage Baseline',
       status: 'unknown',
       dataSource: 'unknown',
       missingFields: ['Storage.capacity_gb'],
       unverified: storUnverified,
-      message: 'Primary storage drive or capacity is not specified.',
-      recommendation: `Select an NVMe SSD of at least ${minStorageGb}GB.`,
+      message: 'Storage drive or capacity is not specified.',
+      recommendation: `Select an SSD/HDD configuration of at least ${minStorageGb}GB.`,
     });
-  } else if (storageGb < minStorageGb) {
+  } else if (totalStorageGb < minStorageGb) {
+    const breakdown =
+      storage && hardDrive
+        ? ` (${ssdInfo.gb || 0}GB SSD + ${hddInfo.gb || 0}GB HDD)`
+        : '';
     results.push({
       ruleId: 'RULE-STOR-01',
       category: 'Storage',
-      title: 'Primary Storage Baseline',
+      title: 'Storage Baseline',
       status: 'warn',
       dataSource: storEstimated ? 'estimated' : 'database',
       missingFields: [],
       unverified: storUnverified,
-      message: `${storage.name} (${storageGb}GB) is below the ${minStorageGb}GB recommended baseline.`,
-      recommendation: `Step up to a ${minStorageGb}GB or 1TB NVMe SSD.`,
+      message: `Combined storage (${totalStorageGb}GB)${breakdown} is below the ${minStorageGb}GB recommended baseline.`,
+      recommendation: `Add a larger SSD or pair with a secondary Hard Drive for extra capacity.`,
     });
   } else {
+    const hasBalancedHdd = Boolean(storage && hardDrive);
+    const breakdown = hasBalancedHdd
+      ? ` (${ssdInfo.gb || 0}GB SSD + ${hddInfo.gb || 0}GB HDD)`
+      : '';
+    const futureUpgradeTip =
+      storage && (ssdInfo.gb || 0) < minStorageGb
+        ? `Future Upgrade Tip: Your ${ssdInfo.gb || 0}GB SSD + ${hddInfo.gb || 0}GB HDD covers bulk storage now; upgrading to a 500GB–1TB NVMe SSD later will give more fast game/app space.`
+        : undefined;
     results.push({
       ruleId: 'RULE-STOR-01',
       category: 'Storage',
-      title: 'Primary Storage Baseline',
+      title: 'Storage Baseline',
       status: 'pass',
       dataSource: storEstimated ? 'estimated' : 'database',
+      hasBalancedHdd,
       missingFields: [],
       unverified: storUnverified,
-      message: `${storageGb}GB storage meets the ${minStorageGb}GB baseline.`,
+      message: `Combined storage (${totalStorageGb}GB)${breakdown} meets the ${minStorageGb}GB baseline.`,
+      recommendation: futureUpgradeTip,
     });
   }
 
@@ -976,7 +999,8 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
     });
   }
 
-  // 11. RULE-RAM-LIM-01: RAM Total Capacity & Speed vs Motherboard Max Limits (via parseRam)
+  // 11. RULE-RAM-LIM-01: RAM Total Capacity (16GB minimum) & Speed vs Motherboard Max Limits (via parseRam)
+  const minRamGb = Math.max(16, Number(ctx.minRamGb || 16));
   const ramLimits = inferBoardRamLimits(board);
   const parsedRam = ram && !isCustomPart(ram) ? parseRam(ram, ctx.ramStickCount || 1) : null;
   const totalRamGb = parsedRam ? parsedRam.totalGb : 0;
@@ -1018,6 +1042,19 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
           recommendation: 'Reduce module capacity/count or pick a higher-rated memory kit/board.',
         })
       );
+    } else if (totalRamGb > 0 && totalRamGb < minRamGb) {
+      results.push({
+        ruleId: 'RULE-RAM-LIM-01',
+        category: 'Memory',
+        title: 'Motherboard RAM Capacity & Speed Limits',
+        status: 'warn',
+        dataSource: ds,
+        missingFields: [],
+        unverified: ramLimUnverified,
+        ramCapacityGb: totalRamGb,
+        message: `RAM configuration (${totalRamGb}GB) is below the ${minRamGb}GB recommended baseline.`,
+        recommendation: `Upgrade to at least ${minRamGb}GB of RAM within ${ramLimits.maxGb || '?'}GB max.`,
+      });
     } else {
       results.push({
         ruleId: 'RULE-RAM-LIM-01',
@@ -1027,7 +1064,8 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
         dataSource: ds,
         missingFields: [],
         unverified: ramLimUnverified,
-        message: `RAM configuration (${totalRamGb}GB) is within motherboard limits (${ramLimits.maxGb}GB max).`,
+        ramCapacityGb: totalRamGb,
+        message: `RAM configuration (${totalRamGb}GB) meets the ${minRamGb}GB baseline and is within motherboard limits (${ramLimits.maxGb}GB max).`,
       });
     }
   }
@@ -1070,28 +1108,16 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
       unverified: igpuUnverified,
       message: `${cpu.name} includes integrated graphics.`,
     });
-  } else if (partCount >= 5) {
-    results.push({
-      ruleId: 'RULE-IGPU-01',
-      category: 'Processors',
-      title: 'Integrated Graphics Availability',
-      status: 'warn',
-      dataSource: typeof cpu.has_igpu === 'boolean' ? 'database' : 'estimated',
-      missingFields: [],
-      unverified: igpuUnverified,
-      message: `${cpu.name} has no integrated graphics and no dedicated GPU is selected.`,
-      recommendation: 'Add a dedicated graphics card or choose a CPU with integrated graphics.',
-    });
   } else {
     results.push({
       ruleId: 'RULE-IGPU-01',
       category: 'Processors',
       title: 'Integrated Graphics Availability',
-      status: 'unknown',
-      dataSource: 'unknown',
-      missingFields: ['Video Cards'],
+      status: partCount >= 5 ? 'warn' : 'unknown',
+      dataSource: partCount >= 5 ? (typeof cpu.has_igpu === 'boolean' ? 'database' : 'estimated') : 'unknown',
+      missingFields: partCount >= 5 ? [] : ['Video Cards'],
       unverified: igpuUnverified,
-      message: `${cpu.name} has no integrated graphics; add a dedicated GPU or complete more build parts.`,
+      message: `${cpu.name} has no integrated graphics and no dedicated GPU is selected.`,
       recommendation: 'Add a dedicated graphics card or choose a CPU with integrated graphics.',
     });
   }

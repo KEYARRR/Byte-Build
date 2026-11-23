@@ -1016,8 +1016,9 @@ export default function App() {
         currentCpu,
         currentGpu,
         actionableIssues,
+        workloadProfile: assistantProfile,
       }),
-    [currentCpu, currentGpu, actionableIssues]
+    [currentCpu, currentGpu, actionableIssues, assistantProfile]
   );
 
   const activeRule = useMemo(
@@ -1704,6 +1705,14 @@ export default function App() {
 
   const renderRationaleAndCompareCards = () => {
     const activeChip = activeRule ? getRuleChipMeta(activeRule) : null;
+    const isActiveRuleGreen =
+      activeRule &&
+      activeRule.status === 'pass' &&
+      !activeRule.unverified &&
+      (activeChip?.dotClass?.includes('emerald') ||
+        activeRule.ruleId === 'RULE-RAM-LIM-01' ||
+        activeRule.ruleId === 'RULE-IGPU-01' ||
+        activeRule.ruleId === 'RULE-STOR-01');
 
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-left">
@@ -1724,6 +1733,8 @@ export default function App() {
                     ? 'bg-slate-800 text-slate-300 border border-slate-700'
                     : activeRule.status === 'fail'
                     ? 'bg-red-950 text-red-400 border border-red-800/50'
+                    : isActiveRuleGreen
+                    ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/50'
                     : activeRule.status === 'warn'
                     ? 'bg-amber-950 text-amber-300 border border-amber-700/50'
                     : activeRule.dataSource === 'estimated'
@@ -1757,6 +1768,17 @@ export default function App() {
                   {activeChip.whyItMatters}
                 </p>
               )}
+              {activeRule.recommendation && (
+                <p
+                  className={`${
+                    activeRule.status === 'pass' ? 'text-emerald-400' : 'text-blue-400'
+                  } text-[11px] font-semibold`}
+                >
+                  {activeRule.status === 'pass'
+                    ? activeRule.recommendation
+                    : `Next Step: ${activeRule.recommendation}`}
+                </p>
+              )}
               {activeRule.recommendation && activeRule.status !== 'pass' && (
                 <p className="text-blue-400 text-[11px] font-semibold">
                   Next Step: {activeRule.recommendation}
@@ -1781,6 +1803,13 @@ export default function App() {
             <div className="flex flex-wrap gap-1.5 pt-2 border-t border-[#1f293d]">
               {ruleResults.map((rule) => {
                 const chip = getRuleChipMeta(rule);
+                const isGreenPass =
+                  rule.status === 'pass' &&
+                  !rule.unverified &&
+                  (chip.dotClass?.includes('emerald') ||
+                    rule.ruleId === 'RULE-RAM-LIM-01' ||
+                    rule.ruleId === 'RULE-IGPU-01' ||
+                    rule.ruleId === 'RULE-STOR-01');
                 return (
                   <button
                     key={rule.ruleId}
@@ -1791,6 +1820,8 @@ export default function App() {
                         ? 'bg-blue-600 border-blue-500 text-white'
                         : rule.status === 'fail'
                         ? 'bg-red-950/50 border-red-800/60 text-red-200 hover:border-red-500'
+                        : isGreenPass
+                        ? 'bg-emerald-950/30 border-emerald-800/40 text-emerald-200 hover:border-emerald-500'
                         : rule.status === 'warn' || rule.dataSource === 'estimated'
                         ? 'bg-amber-950/50 border-amber-800/60 text-amber-200 hover:border-amber-500'
                         : rule.status === 'pass'
@@ -2079,7 +2110,7 @@ export default function App() {
             System Build
           </h3>
           <p className="text-[10px] text-slate-400">
-            {selectedItems.length}/8 components configured
+            {selectedItems.length}/{CATEGORIES.length} components configured
           </p>
         </div>
 
@@ -2487,7 +2518,7 @@ export default function App() {
             <span className="text-[10px] text-slate-300 uppercase font-bold tracking-wider">
               {activePage === 'upgrade'
                 ? 'Upgrade Cost'
-                : `Total (${selectedItems.length}/8)`}
+                : `Total (${selectedItems.length}/${CATEGORIES.length})`}
             </span>
             <span
               className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
@@ -2538,7 +2569,7 @@ export default function App() {
                 Live Build & DSS Diagnostics
               </span>
               <h3 className="text-sm font-black text-white">
-                System Build ({selectedItems.length}/8) · {drawerScoreLabel}
+                System Build ({selectedItems.length}/{CATEGORIES.length}) · {drawerScoreLabel}
               </h3>
             </div>
             <button
@@ -2739,7 +2770,7 @@ export default function App() {
                 Build Focus Mode · Side Panel & Catalog Collapsed
               </span>
               <h2 className="text-sm font-black text-white">
-                {selectedItems.length}/8 Components Selected · {focusScoreLabel} · Total:{' '}
+                {selectedItems.length}/{CATEGORIES.length} Components Selected · {focusScoreLabel} · Total:{' '}
                 {peso(totalPrice)}
               </h2>
             </div>

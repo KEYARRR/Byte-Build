@@ -100,24 +100,26 @@ export function evaluatePerformanceTier({
   currentCpu = null,
   currentGpu = null,
   actionableIssues = [],
-}) {
+  workloadProfile = 'Gaming',
+} = {}) {
   const cpuTier = deriveComponentTier(currentCpu, 'Processors');
   const gpuTier = deriveComponentTier(currentGpu, 'Video Cards');
   const hasApuGraphics = hasIntegratedGraphics(currentCpu) === true && !currentGpu;
-
-  if (!currentGpu && !hasApuGraphics) {
-    return {
-      label: 'Select a Graphics Card',
-      description:
-        'Choose a GPU (or an APU with integrated graphics) to evaluate gaming and productivity performance tiers.',
-    };
-  }
+  const profile = String(workloadProfile || 'Gaming');
 
   const critical = actionableIssues.find((issue) => issue.severity === 'critical');
   if (critical) {
     return {
       label: 'Compatibility Conflict Detected',
       description: critical.message,
+    };
+  }
+
+  if (!currentGpu && !hasApuGraphics) {
+    return {
+      label: 'Select a Graphics Card',
+      description:
+        'Choose a GPU (or an APU with integrated graphics) to evaluate gaming and productivity performance tiers.',
     };
   }
 
@@ -129,17 +131,48 @@ export function evaluatePerformanceTier({
     };
   }
 
-  if (gpuTier === 3 || cpuTier === 3) {
+  if (profile === 'Office/Productivity') {
     return {
-      label: '1080p Esports & Productivity Rig',
+      label: 'Office / Productivity Configuration',
       description:
-        'Well-suited for smooth 1080p competitive play, streaming, and everyday productivity.',
+        'Tuned for everyday productivity, coursework, multitasking, and energy-efficient operation.',
+    };
+  }
+
+  if (profile === 'Content Creation') {
+    if (cpuTier >= 4 || gpuTier >= 4) {
+      return {
+        label: 'Creator Workstation Configuration',
+        description:
+          'Strong CPU and GPU tier balance for video editing, rendering, and creative workloads.',
+      };
+    }
+    return {
+      label: 'Entry Creator Configuration',
+      description:
+        'Starter creator setup for photo/video editing, design tasks, and daily productivity.',
+    };
+  }
+
+  if (profile === 'Mixed/Balanced' || profile === 'Balanced') {
+    return {
+      label: 'Balanced Multi-Purpose Configuration',
+      description:
+        'Evenly balanced across gaming, productivity, and general desktop workloads.',
+    };
+  }
+
+  if (gpuTier === 3 || cpuTier === 3 || Boolean(currentGpu)) {
+    return {
+      label: '1080p Gaming & Esports Configuration',
+      description:
+        'Configured for gaming workloads with dedicated graphics output; stepping up GPU tier expands graphics headroom.',
     };
   }
 
   return {
-    label: 'Entry / Office Desktop Configuration',
+    label: 'Integrated Graphics Gaming Starter',
     description:
-      'Balanced for office/academic workloads, light gaming, and energy-conscious builds.',
+      'Uses integrated graphics for light gaming and everyday desktop workloads.',
   };
 }
