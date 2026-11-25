@@ -422,6 +422,24 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
     });
   }
 
+  // Advisory for A320 boards paired with Ryzen 5000 CPUs (BIOS support varies / unverified)
+  const boardUpper = `${board?.name || ''} ${board?.specs || ''}`.toUpperCase();
+  const cpuUpper = `${cpu?.name || ''} ${cpu?.specs || ''}`.toUpperCase();
+  if (board && cpu && /\bA320\b/.test(boardUpper) && /\bRYZEN\s+[3579]\s+5\d{3}[A-Z0-9]*\b/.test(cpuUpper)) {
+    results.push({
+      ruleId: 'RULE-A320-5000',
+      category: 'Motherboards',
+      title: 'A320 BIOS / Ryzen 5000 Support',
+      status: 'warn',
+      dataSource: 'estimated',
+      missingFields: [],
+      unverified: true,
+      message:
+        'A320 boards often require a BIOS update for Ryzen 5000 (and some models lack support). Verify exact board BIOS support before purchase.',
+      recommendation: 'Confirm exact A320 board BIOS support or choose a B450/B550 board.',
+    });
+  }
+
   // 2. RULE-MEM-01: RAM <-> Motherboard Memory Type
   let ramType = ram?.memory_type ? String(ram.memory_type).trim().toUpperCase() : '';
   let ramMemEstimated = false;
@@ -843,7 +861,7 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
     }
   }
 
-  // 9. RULE-PSU-CONN-01: PSU PCIe / 12VHPWR Connectors vs GPU Requirement (NO default guesses)
+  // 9. RULE-PSU-CONN-01: PSU PCIe / 12VHPWR Connectors vs GPU Requirement
   const gpuNeeds12v = Boolean(gpu?.gpu_requires_12vhpwr);
   const gpu8PinReq =
     gpu?.gpu_pcie_8pin_req !== undefined &&
@@ -999,7 +1017,7 @@ export function evaluateBuildRules(build = {}, ctx = {}) {
     });
   }
 
-  // 11. RULE-RAM-LIM-01: RAM Total Capacity (16GB minimum) & Speed vs Motherboard Max Limits (via parseRam)
+  // 11. RULE-RAM-LIM-01: RAM Total Capacity (16GB minimum) & Speed vs Motherboard Max Limits
   const minRamGb = Math.max(16, Number(ctx.minRamGb || 16));
   const ramLimits = inferBoardRamLimits(board);
   const parsedRam = ram && !isCustomPart(ram) ? parseRam(ram, ctx.ramStickCount || 1) : null;

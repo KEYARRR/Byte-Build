@@ -1,120 +1,228 @@
 import { CATEGORIES } from './config.js';
 
-const normalizeText = (value) => String(value || '').trim().toLowerCase();
+const norm = (v) => String(v || '').trim().toLowerCase();
 
-const OCR_STOP_WORDS = new Set([
-  'cpu',
-  'gpu',
-  'ram',
-  'ssd',
-  'hdd',
-  'psu',
-  'case',
-  'mobo',
-  'motherboard',
-  'processor',
-  'memory',
-  'storage',
-  'cooler',
-  'power',
-  'supply',
-  'video',
-  'card',
-  'pcs',
-  'php',
-  'with',
-  'for',
-  'the',
-  'and',
-  'specs',
-  'build',
-]);
+export function levenshteinDistance(a = '', b = '') {
+  const s = String(a).toUpperCase();
+  const t = String(b).toUpperCase();
+  const m = s.length;
+  const n = t.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
 
-export function matchOcrTextToCatalog(rawText = '', activeProducts = [], preorderProducts = []) {
-  const shopPool = [
-    ...(Array.isArray(activeProducts)
-      ? activeProducts.map((p) => ({ ...p, _source: 'active' }))
-      : []),
-    ...(Array.isArray(preorderProducts)
-      ? preorderProducts.map((p) => ({ ...p, _source: 'preorder' }))
-      : []),
-  ];
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i += 1) dp[i][0] = i;
+  for (let j = 0; j <= n; j += 1) dp[0][j] = j;
 
-  const lines = String(rawText || '')
-    .split('\n')
-    .map((line) => line.replace(/^[\s\-•*0-9.)]+/, '').trim())
-    .filter((line) => line.length >= 4);
+  for (let i = 1; i <= m; i += 1) {
+    for (let j = 1; j <= n; j += 1) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[m][n];
+}
 
-  return lines.map((line) => {
-    const tokens = line
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((tok) => tok.length >= 2 && !OCR_STOP_WORDS.has(tok));
+function fixAlphanumericToken(token) {
+  // Only alter tokens that already contain digits (leaves words like "COOLER MASTER" untouched)
+  if (!/\d/.test(token)) return token;
+  let out = token;
+  out = out.replace(/O/g, '0').replace(/o/g, '0');
+  out = out.replace(/(?<=\d)[lI]|[lI](?=\d)/g, '1');
+  out = out.replace(/S(?=\d)|(?<=\d)S/g, '5');
+  out = out.replace(/B(?=\d)|(?<=\d)B/g, '8');
+  out = out.replace(/([A-Za-z]{2,})(\d{3,})/g, '$1 $2');
+  return out;
+}
 
-    if (tokens.length === 0) {
-      return { rawLine: line, status: 'Unavailable', matchedPart: null };
+export function cleanOcrText(rawText = '') {
+  return String(rawText || '')
+    .split(/\r?\n/)
+    .map((line) => {
+      let s = line.trim();
+      if (!s) return '';
+      // Strip numbered list prefixes ("1. ", "2) "), bullets, prices, and quantities
+      s = s.replace(/^\d+[.)]\s+/, '');
+      s = s.replace(/^[\s•\-*▪▸►·]+/, '');
+      s = s.replace(/(?:PHP|₱|P)\s*[\d,]+(?:\.\d{1,2})?/gi, ' ');
+      s = s.replace(/\b\d+\s*[xX]\b/g, ' ');
+
+      const tokens = s.split(/\s+/).filter(Boolean).map(fixAlphanumericToken);
+      return tokens.join(' ').trim();
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function extractModelTokens(text = '') {
+  const upper = String(text || '').toUpperCase();
+  const matches = upper.match(/[A-Z0-9]+(?:-[A-Z0-9]+)*/g) || [];
+  return matches.filter((tok) => /\d/.test(tok) && tok.length >= 3);
+}
+
+function extractAlphaTokens(text = '') {
+  const upper = String(text || '').toUpperCase();
+  const matches = upper.match(/[A-Z]{2,}(?:-[A-Z]{2,})*/g) || [];
+  return matches.filter((tok) => !['GB', 'TB', 'MHZ', 'DDR', 'WIFI', 'DUAL', 'PRO'].includes(tok));
+}
+
+function scoreCatalogMatch(line, item) {
+  const cleanedLine = cleanOcrText(line).toUpperCase();
+  if (!cleanedLine) return { score: 0, reason: 'Empty line' };
+
+  const itemName = String(item.name || '').toUpperCase();
+  const itemSpecs = String(item.specs || '').toUpperCase();
+  const itemBrand = String(item.brand || '').toUpperCase();
+  const combined = `${itemName} ${itemSpecs}`;
+
+  const lineModels = extractModelTokens(cleanedLine);
+  const itemModels = extractModelTokens(combined);
+
+  let modelScore = 0;
+  let exactModelHits = 0;
+  let fuzzyModelHits = 0;
+
+  for (const lMod of lineModels) {
+    const compactL = lMod.replace(/[^A-Z0-9]/g, '');
+    if (itemModels.includes(lMod) || combined.includes(lMod)) {
+      modelScore += 0.78;
+      exactModelHits += 1;
+      continue;
+    }
+    if (compactL.length >= 4) {
+      const matchedFuzzy = itemModels.some(
+        (iMod) =>
+          Math.abs(iMod.length - lMod.length) <= 1 &&
+          levenshteinDistance(lMod, iMod) <= 1
+      );
+      if (matchedFuzzy) {
+        modelScore += 0.75;
+        fuzzyModelHits += 1;
+      }
+    }
+  }
+
+  // Secondary/tie-breaker alignment on brand & non-numeric model series tokens (e.g., RYZEN, PRO-VDH, RTX)
+  let contextBonus = 0;
+  if (itemBrand && cleanedLine.includes(itemBrand)) {
+    contextBonus += 0.08;
+  }
+  const lineAlpha = extractAlphaTokens(cleanedLine);
+  const itemAlpha = new Set(extractAlphaTokens(combined));
+  let alphaHits = 0;
+  for (const tok of lineAlpha) {
+    if (itemAlpha.has(tok) || combined.includes(tok)) {
+      alphaHits += 1;
+    }
+  }
+  if (alphaHits > 0) {
+    contextBonus += Math.min(0.14, alphaHits * 0.07);
+  }
+
+  const totalScore = Math.min(1, Number((modelScore + contextBonus).toFixed(3)));
+  let reason = 'No model match';
+  if (exactModelHits > 0) reason = `Exact model match (${lineModels.slice(0, 2).join(', ')})`;
+  else if (fuzzyModelHits > 0) reason = 'Fuzzy model match within edit distance 1';
+  else if (contextBonus > 0) reason = 'Brand/series hint only';
+
+  return { score: totalScore, reason };
+}
+
+export function classifyMatchStatus(confidence, matchedPart) {
+  if (!matchedPart) return 'Unavailable';
+  if (confidence >= 0.75) return 'Matched';
+  if (confidence >= 0.45) return 'Needs confirmation';
+  return 'Unavailable';
+}
+
+export function matchOcrTextToCatalog(rawText, activeProducts = [], preorderProducts = []) {
+  const cleanedBlock = cleanOcrText(rawText);
+  const lines = cleanedBlock
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length >= 2);
+
+  const activeList = Array.isArray(activeProducts) ? activeProducts : [];
+  const preorderList = Array.isArray(preorderProducts) ? preorderProducts : [];
+  const pool = [...activeList, ...preorderList];
+
+  return lines.map((rawLine) => {
+    let bestItem = null;
+    let bestScore = 0;
+    let bestReason = 'No catalog match';
+    let bestSource = 'active';
+
+    for (const item of pool) {
+      const { score, reason } = scoreCatalogMatch(rawLine, item);
+      if (score <= 0) continue;
+      const isInStock = norm(item.stock_status) === 'in stock';
+      const betterScore = score > bestScore + 0.005;
+      const tiePreferInStock =
+        Math.abs(score - bestScore) <= 0.005 &&
+        isInStock &&
+        norm(bestItem?.stock_status) !== 'in stock';
+
+      if (betterScore || tiePreferInStock) {
+        bestScore = Math.min(1, Number(score.toFixed(2)));
+        bestItem = item;
+        bestReason = reason;
+        bestSource = preorderList.some((p) => p === item || (p.id && p.id === item.id))
+          ? 'preorder'
+          : 'active';
+      }
     }
 
-    const scored = shopPool
-      .map((item) => {
-        const hay = `${item.name || ''} ${item.brand || ''} ${item.sku_code || ''} ${
-          item.specs || ''
-        }`.toLowerCase();
-        const hits = tokens.reduce((count, tok) => (hay.includes(tok) ? count + 1 : count), 0);
-        const exactModelBonus = tokens.some((tok) => /\d{3,4}/.test(tok) && hay.includes(tok))
-          ? 1
-          : 0;
-        return { item, hits, score: hits + exactModelBonus };
-      })
-      .filter((entry) => entry.hits >= Math.min(2, tokens.length))
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        const aInStock =
-          a.item._source === 'active' && a.item.stock_status !== 'Sold Out' ? 1 : 0;
-        const bInStock =
-          b.item._source === 'active' && b.item.stock_status !== 'Sold Out' ? 1 : 0;
-        return bInStock - aInStock;
-      });
+    const confidenceTier = classifyMatchStatus(bestScore, bestItem);
+    const hasMatch = Boolean(bestItem && bestScore >= 0.45);
+    const stockStatus = hasMatch
+      ? bestItem.stock_status || (bestSource === 'preorder' ? 'Pre-Order' : 'In Stock')
+      : 'Unavailable';
 
-    const best = scored[0]?.item || null;
-    if (!best) {
-      return { rawLine: line, status: 'Unavailable', matchedPart: null };
-    }
-
-    const status =
-      best._source === 'preorder' || best.stock_status === 'Pre-Order'
-        ? 'Pre-Order'
-        : best.stock_status === 'Sold Out'
-        ? 'Sold Out'
-        : 'In Stock';
-
-   const cleanPart = Object.fromEntries(
-  Object.entries(best).filter(([key]) => key !== '_source')
-);
-return { rawLine: line, status, matchedPart: cleanPart };
+    return {
+      rawLine,
+      matchedPart: hasMatch ? bestItem : null,
+      confidence: bestScore,
+      matchConfidence: confidenceTier,
+      needsConfirmation: confidenceTier === 'Needs confirmation',
+      reason: bestReason,
+      status: stockStatus,
+      stockStatus,
+      confirmed: confidenceTier === 'Matched' && norm(stockStatus) === 'in stock',
+    };
   });
 }
 
-export function applyInStockOcrMatches(currentBuild = {}, ocrScanResults = []) {
-  const next = { ...currentBuild };
-  const inStockMatches = (Array.isArray(ocrScanResults) ? ocrScanResults : [])
-    .filter((entry) => entry.status === 'In Stock' && entry.matchedPart)
-    .map((entry) => entry.matchedPart);
-
+export function applyInStockOcrMatches(currentBuild = {}, scanResults = []) {
+  const nextBuild = { ...currentBuild };
   let loadedCount = 0;
 
-  for (const part of inStockMatches) {
-    const matchedCat = CATEGORIES.find(
-      (cat) => normalizeText(cat) === normalizeText(part.category)
-    );
+  for (const entry of Array.isArray(scanResults) ? scanResults : []) {
+    if (entry?.confirmed === false || entry?.needsConfirmation === true) continue;
+    if (entry?.matchConfidence === 'Needs confirmation' || entry?.matchConfidence === 'Unavailable') {
+      continue;
+    }
+
+    const part = entry?.matchedPart || entry?.part;
+    if (!part) continue;
+
+    const effectiveStock = norm(part.stock_status ?? entry?.stockStatus ?? entry?.status ?? '');
+    if (effectiveStock !== 'in stock') continue;
+
+    const matchedCat = CATEGORIES.find((cat) => norm(cat) === norm(part.category));
     if (matchedCat) {
-      next[matchedCat] = { ...part, stock_status: 'In Stock' };
+      nextBuild[matchedCat] = part;
       loadedCount += 1;
     }
   }
 
   return {
-    build: next,
+    build: nextBuild,
+    nextBuild,
+    appliedCount: loadedCount,
     loadedCount,
   };
 }

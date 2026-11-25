@@ -31,6 +31,16 @@ export const WORKLOAD_WEIGHTS = {
     'CPU Coolers': 5,
     Cases: 5,
   },
+  'Office/Productivity': {
+    Processors: 28,
+    'Video Cards': 6,
+    Memory: 16,
+    Storage: 18,
+    'Hard Drives': 8,
+    'Power Supplies': 10,
+    'CPU Coolers': 6,
+    Cases: 8,
+  },
   Balanced: {
     'Video Cards': 26,
     Processors: 21,
