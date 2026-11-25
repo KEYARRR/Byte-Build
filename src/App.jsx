@@ -57,6 +57,11 @@ import {
   buildSlotManifestRows,
   computePowerDisplayMetrics,
 } from './lib/buildSummary.js';
+import {
+  buildUnifiedUpgradeRows,
+  getUpgradeMissingCoreLabels,
+  buildNextUpgradeNotes,
+} from './lib/upgradeAdvisor.js';
 import { getRuleChipMeta } from './lib/ruleDisplay.js';
 import { RULE_CATALOG } from './lib/ruleCatalog.js';
 
@@ -162,6 +167,7 @@ export default function App() {
   const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
 
   const [buildFocused, setBuildFocused] = useState(false);
+  const [upgradeFocused, setUpgradeFocused] = useState(false);
   const [showUnknownRules, setShowUnknownRules] = useState(false);
   const [showRuleCatalogPanel, setShowRuleCatalogPanel] = useState(false);
 
@@ -426,10 +432,10 @@ export default function App() {
   }, [refreshInventoryNow, refreshAdminLogsNow]);
 
   useEffect(() => {
-    if (buildFocused && focusViewRef.current) {
+    if ((buildFocused || upgradeFocused) && focusViewRef.current) {
       focusViewRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
-  }, [buildFocused]);
+  }, [buildFocused, upgradeFocused]);
 
   const handleLogoClick = () => {
     setActivePage('home');
@@ -822,13 +828,31 @@ export default function App() {
     const customItem = createCustomOwnedPart(customPartForm);
     if (!customItem) return;
 
-    setExistingPc((prev) => ({
-      ...prev,
-      [customItem.category]: customItem,
-    }));
+    const matchedCategory =
+      CATEGORIES.find((cat) => normalizeText(cat) === normalizeText(customItem.category)) ||
+      customItem.category;
+
+    setExistingPc((prev) => {
+      const next = {
+        ...prev,
+        [matchedCategory]: {
+          ...customItem,
+          category: matchedCategory,
+          isCustom: true,
+          unverified: true,
+        },
+      };
+      const combinedCount = CATEGORIES.filter(
+        (cat) => Boolean(selectedBuild[cat] || next[cat])
+      ).length;
+      if (combinedCount === CATEGORIES.length) {
+        setUpgradeFocused(true);
+      }
+      return next;
+    });
     setCustomModalOpen(false);
     setCustomPartForm({
-      category: customItem.category,
+      category: matchedCategory,
       name: '',
       brand: 'Custom',
       price: '',
@@ -1036,31 +1060,7 @@ export default function App() {
   }, [activePage, upgradeCatalogProducts, products]);
 
   const selectedItems = useMemo(() => Object.values(selectedBuild).filter(Boolean), [selectedBuild]);
-
-  const missingCoreLabels = useMemo(() => {
-    const missing = [];
-    if (!selectedBuild.Processors) missing.push('CPU');
-    if (!selectedBuild.Motherboards) missing.push('Motherboard');
-    if (!selectedBuild.Memory) missing.push('RAM');
-    if (!selectedBuild.Storage) missing.push('Boot Drive');
-    if (!selectedBuild['Power Supplies']) missing.push('PSU');
-    if (!selectedBuild.Cases) missing.push('Case');
-    return missing;
-  }, [selectedBuild]);
-
-  const isBuildIncomplete = selectedItems.length > 0 && missingCoreLabels.length > 0;
-  const incompleteBadgeText =
-    missingCoreLabels.length === 1 && missingCoreLabels[0] === 'PSU'
-      ? 'Incomplete build — missing: PSU'
-      : `Incomplete build — missing: ${missingCoreLabels.join(', ')}`;
-
-  const customPartFlags = useMemo(() => getCustomBuildSummary(selectedBuild), [selectedBuild]);
-  const hasAnyUnverifiedPart = customPartFlags.hasCustomPart;
-
-  const totalPrice = useMemo(
-    () => calculateBuildTotal(selectedBuild, CATEGORIES, selectedRamCount),
-    [selectedBuild, selectedRamCount]
-  );
+  const existingItems = useMemo(() => Object.values(existingPc).filter(Boolean), [existingPc]);
 
   const effectiveParts = useMemo(
     () =>
@@ -1069,6 +1069,63 @@ export default function App() {
         return acc;
       }, {}),
     [selectedBuild, existingPc]
+  );
+
+  const effectiveItems = useMemo(
+    () => Object.values(effectiveParts).filter(Boolean),
+    [effectiveParts]
+  );
+
+  const missingCoreLabels = useMemo(() => {
+    if (activePage === 'upgrade') {
+      return getUpgradeMissingCoreLabels({ existingPc, selectedBuild });
+    }
+    const missing = [];
+    if (!selectedBuild.Processors) missing.push('CPU');
+    if (!selectedBuild.Motherboards) missing.push('Motherboard');
+    if (!selectedBuild.Memory) missing.push('RAM');
+    if (!selectedBuild.Storage) missing.push('Boot Drive');
+    if (!selectedBuild['Power Supplies']) missing.push('PSU');
+    if (!selectedBuild.Cases) missing.push('Case');
+    return missing;
+  }, [activePage, existingPc, selectedBuild]);
+
+  const isBuildIncomplete =
+    activePage === 'upgrade'
+      ? (selectedItems.length > 0 || existingItems.length > 0) && missingCoreLabels.length > 0
+      : selectedItems.length > 0 && missingCoreLabels.length > 0;
+
+  const incompleteBadgeText =
+    missingCoreLabels.length === 1 && missingCoreLabels[0] === 'PSU'
+      ? 'Incomplete rig — missing: PSU'
+      : `Incomplete rig — missing: ${missingCoreLabels.join(', ')}`;
+
+  const customPartFlags = useMemo(
+    () => getCustomBuildSummary(activePage === 'upgrade' ? effectiveParts : selectedBuild),
+    [activePage, effectiveParts, selectedBuild]
+  );
+  const hasAnyUnverifiedPart = customPartFlags.hasCustomPart;
+
+  const totalPrice = useMemo(() => {
+    if (activePage === 'upgrade') {
+      return CATEGORIES.reduce((sum, cat) => {
+        const upg = selectedBuild[cat];
+        if (!upg) return sum;
+        return sum + getEffectiveItemPrice(cat, upg, selectedRamCount);
+      }, 0);
+    }
+    return calculateBuildTotal(selectedBuild, CATEGORIES, selectedRamCount);
+  }, [activePage, selectedBuild, selectedRamCount]);
+
+  const unifiedUpgradeRows = useMemo(
+    () =>
+      buildUnifiedUpgradeRows({
+        existingPc,
+        selectedBuild,
+        existingRamCount,
+        selectedRamCount,
+      }),
+    [existingPc, selectedBuild, existingRamCount, selectedRamCount]
   );
 
   const activeRamCount = selectedBuild.Memory ? selectedRamCount : existingRamCount;
@@ -1101,6 +1158,19 @@ export default function App() {
     [effectiveParts, activeRamCount, powerMetrics, dssRules]
   );
 
+  const nextUpgradeNotes = useMemo(
+    () =>
+      buildNextUpgradeNotes({
+        existingPc,
+        selectedBuild,
+        effectiveParts,
+        ramStickCount: activeRamCount || 2,
+        powerMetrics,
+        ruleResults,
+      }),
+    [existingPc, selectedBuild, effectiveParts, activeRamCount, powerMetrics, ruleResults]
+  );
+
   const verificationCoverage = useMemo(
     () => getVerificationCoverage(ruleResults),
     [ruleResults]
@@ -1125,7 +1195,7 @@ export default function App() {
     () =>
       buildSystemRecommendation({
         actionableIssues,
-        selectedItems,
+        selectedItems: activePage === 'upgrade' ? effectiveItems : selectedItems,
         existingPc,
         currentCpu,
         currentPsu,
@@ -1135,6 +1205,8 @@ export default function App() {
       }),
     [
       actionableIssues,
+      activePage,
+      effectiveItems,
       selectedItems,
       existingPc,
       currentCpu,
@@ -1282,20 +1354,25 @@ export default function App() {
   };
 
   const handleExportQuotation = async () => {
-    if (selectedItems.length === 0) return;
+    const exportBuild = activePage === 'upgrade' ? effectiveParts : selectedBuild;
+    const exportItems = Object.values(exportBuild).filter(Boolean);
+    if (exportItems.length === 0) return;
+
     if (!quoteConsentChecked) {
       showNotice('warning', 'Please check the Data Privacy notice before exporting a quotation.');
       return;
     }
+
     setExportingQuote(true);
     const refCode = `BB-${printReferenceId}`;
+    const fileName = `ByteBuild-Quotation-${refCode}.html`;
 
     try {
       const payload = buildQuotationPayload({
         refCode,
         currentUser,
-        selectedBuild,
-        selectedRamCount,
+        selectedBuild: exportBuild,
+        selectedRamCount: activeRamCount || 2,
         totalPrice,
         compatibilityScore,
       });
@@ -1303,14 +1380,14 @@ export default function App() {
       if (error) {
         showNotice(
           'warning',
-          `Quotation downloaded locally, but database log failed (${error.message}).`,
+          `Quotation export ready, but database log failed (${error.message}).`,
           handleExportQuotation
         );
       }
     } catch (err) {
       showNotice(
         'warning',
-        `Quotation downloaded locally, but database log failed (${err.message}).`,
+        `Quotation export ready, but database log failed (${err.message}).`,
         handleExportQuotation
       );
     }
@@ -1319,23 +1396,61 @@ export default function App() {
       const invoiceHtml = buildQuotationHtmlDocument({
         refCode,
         printDateString,
-        selectedBuild,
-        selectedRamCount,
+        selectedBuild: exportBuild,
+        selectedRamCount: activeRamCount || 2,
         totalPrice,
         compatibilityScore,
         verificationCoverage,
         activePeakWatts: powerMetrics.activePeakWatts,
         recommendedPsuWatts: powerMetrics.recommendedPsuWatts,
       });
-      const blob = new Blob([invoiceHtml], { type: 'text/html' });
+
+      const blob = new Blob([invoiceHtml], { type: 'text/html;charset=utf-8' });
+      const fileObj =
+        typeof File !== 'undefined' ? new File([blob], fileName, { type: 'text/html' }) : null;
+
+      if (
+        fileObj &&
+        typeof navigator !== 'undefined' &&
+        typeof navigator.share === 'function' &&
+        (!navigator.canShare || navigator.canShare({ files: [fileObj] }))
+      ) {
+        try {
+          await navigator.share({
+            title: `ByteBuild Quotation ${refCode}`,
+            text: `ByteBuild Quotation (${refCode})`,
+            files: [fileObj],
+          });
+          return;
+        } catch (shareErr) {
+          if (shareErr?.name === 'AbortError') return;
+        }
+      }
+
       const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `ByteBuild-Quotation-${refCode}.html`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      const isAndroid =
+        typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent || '');
+
+      if (isAndroid) {
+        const opened = window.open(url, '_blank', 'noopener,noreferrer');
+        if (!opened) {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }
+        setTimeout(() => URL.revokeObjectURL(url), 15000);
+      } else {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }
     } finally {
       setExportingQuote(false);
     }
@@ -1347,19 +1462,32 @@ export default function App() {
     );
     if (!matchedCategory) return;
 
+    const updatedItem = {
+      ...product,
+      stock_status:
+        inventoryMode === 'preorder'
+          ? 'Pre-Order'
+          : product.stock_status || 'In Stock',
+    };
+
     setSelectedBuild((prev) => {
       const next = {
         ...prev,
-        [matchedCategory]: {
-          ...product,
-          stock_status:
-            inventoryMode === 'preorder'
-              ? 'Pre-Order'
-              : product.stock_status || 'In Stock',
-        },
+        [matchedCategory]: updatedItem,
       };
-      if (Object.values(next).filter(Boolean).length === CATEGORIES.length) {
+      if (
+        activePage === 'builder' &&
+        Object.values(next).filter(Boolean).length === CATEGORIES.length
+      ) {
         setBuildFocused(true);
+      }
+      if (activePage === 'upgrade') {
+        const combinedCount = CATEGORIES.filter(
+          (cat) => Boolean(next[cat] || existingPc[cat])
+        ).length;
+        if (combinedCount === CATEGORIES.length) {
+          setUpgradeFocused(true);
+        }
       }
       return next;
     });
@@ -1370,7 +1498,21 @@ export default function App() {
   };
 
   const handleSetExistingPart = (category, product) => {
-    setExistingPc((prev) => ({ ...prev, [category]: product }));
+    const matchedCategory = CATEGORIES.find(
+      (cat) => normalizeText(cat) === normalizeText(category || product?.category)
+    );
+    if (!matchedCategory) return;
+
+    setExistingPc((prev) => {
+      const next = { ...prev, [matchedCategory]: product };
+      const combinedCount = CATEGORIES.filter(
+        (cat) => Boolean(selectedBuild[cat] || next[cat])
+      ).length;
+      if (combinedCount === CATEGORIES.length) {
+        setUpgradeFocused(true);
+      }
+      return next;
+    });
   };
 
   const handleUpgradeAction = (category, product) => {
@@ -1393,7 +1535,11 @@ export default function App() {
     setBuildFocused(false);
   };
 
-  const handleClearExistingPc = () => setExistingPc(INITIAL_EXISTING_PC);
+  const handleClearExistingPc = () => {
+    setExistingPc(INITIAL_EXISTING_PC);
+    setExistingRamCount(2);
+    setUpgradeFocused(false);
+  };
 
   const handleSaveCurrentBuild = async () => {
     if (!currentUser) {
@@ -1401,7 +1547,9 @@ export default function App() {
       setActivePage('login');
       return;
     }
-    if (selectedItems.length === 0) {
+    const buildToSave = activePage === 'upgrade' ? effectiveParts : selectedBuild;
+    const countToSave = Object.values(buildToSave).filter(Boolean).length;
+    if (countToSave === 0) {
       alert('Your build is empty. Select components first.');
       return;
     }
@@ -1420,7 +1568,7 @@ export default function App() {
         {
           user_id: currentUser.id,
           build_name: buildName,
-          build_data: { ...selectedBuild, __ramStickCount: selectedRamCount },
+          build_data: { ...buildToSave, __ramStickCount: activeRamCount || 2 },
           total_price: totalPrice,
           compatibility_score: compatibilityScore,
         },
@@ -1605,7 +1753,10 @@ export default function App() {
     <div className="flex gap-2 overflow-x-auto pb-2.5 pt-0.5 border-b border-[#1f293d] scroll-smooth">
       {CATEGORIES.map((category) => {
         const isActive = activeTab === category && activePage !== 'home';
-        const hasSelection = Boolean(selectedBuild[category]);
+        const hasSelection =
+          activePage === 'upgrade'
+            ? Boolean(selectedBuild[category] || existingPc[category])
+            : Boolean(selectedBuild[category]);
         return (
           <button
             key={category}
@@ -1961,7 +2112,9 @@ export default function App() {
 
     const effectiveBadgeLabel =
       isBuildIncomplete && activeChip?.badgeLabel?.toUpperCase() === 'VERIFIED'
-        ? 'Build incomplete'
+        ? activePage === 'upgrade'
+          ? 'Rig incomplete'
+          : 'Build incomplete'
         : activeChip?.badgeLabel;
 
     return (
@@ -2424,9 +2577,323 @@ export default function App() {
     </div>
   );
 
+  const renderUnifiedUpgradeListCard = (showFocusButton = false) => {
+    const activeRigCount = unifiedUpgradeRows.filter((r) => Boolean(r.activeItem)).length;
+    const selectedUpgradeCount = unifiedUpgradeRows.filter((r) => Boolean(r.upgradeItem)).length;
+
+    return (
+      <div
+        id="printable-quotation"
+        className="bg-[#111827] border border-[#1f293d] rounded-lg p-3.5 text-left space-y-3"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-[#1f293d] pb-2 mb-2 print:hidden">
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">
+              Unified Upgrade & Rig Price List
+            </span>
+            <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+              System Build ({activeRigCount}/{CATEGORIES.length} slots · {selectedUpgradeCount} upgrade{selectedUpgradeCount === 1 ? '' : 's'})
+            </h3>
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            {showFocusButton && activeRigCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setUpgradeFocused(true)}
+                className="px-2 py-0.5 bg-sky-600 text-white rounded text-[10px] font-bold"
+              >
+                Focus Rig
+              </button>
+            )}
+            <button
+              onClick={handleSaveCurrentBuild}
+              disabled={savingBuild || effectiveItems.length === 0}
+              className="px-2 py-0.5 bg-emerald-700 text-white rounded text-[10px] font-bold disabled:opacity-40"
+            >
+              {savingBuild ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              onClick={handleExportQuotation}
+              disabled={exportingQuote || effectiveItems.length === 0}
+              className="px-2 py-0.5 bg-indigo-600 text-white rounded text-[10px] font-bold disabled:opacity-40"
+            >
+              {exportingQuote ? 'Exporting...' : 'Export'}
+            </button>
+            <button
+              onClick={() => window.print()}
+              disabled={effectiveItems.length === 0}
+              className="px-2 py-0.5 bg-blue-700 text-white rounded text-[10px] font-bold disabled:opacity-40"
+            >
+              Print
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                handleClearBuild();
+                handleClearExistingPc();
+              }}
+              className="px-1.5 py-0.5 text-slate-400 hover:text-white text-[10px]"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {isBuildIncomplete && (
+          <div className="px-3 py-2 rounded bg-amber-950/60 border border-amber-700/50 text-[11px] font-bold text-amber-200 print:hidden">
+            {incompleteBadgeText}
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          {unifiedUpgradeRows.map((row) => {
+            const displayPrice = row.upgradeItem
+              ? peso(row.upgradeCost)
+              : row.ownedItem
+              ? 'Owned'
+              : '--';
+
+            return (
+              <div
+                key={`upg-row-${row.category}`}
+                className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+              >
+                <div className="min-w-0 flex-1 space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold uppercase text-slate-400">
+                      {getCategoryLabel(row.category)}
+                    </span>
+                    <span
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                        row.isUpgraded
+                          ? 'bg-blue-950 text-blue-300 border border-blue-700/40'
+                          : row.isAddedNew
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/40'
+                          : row.isOwnedOnly
+                          ? 'bg-slate-800 text-slate-300'
+                          : 'bg-slate-900 text-slate-500'
+                      }`}
+                    >
+                      {row.statusLabel}
+                    </span>
+                    {row.isUnverified && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-300">
+                        unverified
+                      </span>
+                    )}
+                  </div>
+
+                  {row.isUpgraded ? (
+                    <p className="text-white font-semibold truncate">
+                      <span className="text-slate-400 line-through mr-1.5">{row.ownedItem.name}</span>
+                      <span className="text-blue-300">→ {row.upgradeItem.name}</span>
+                    </p>
+                  ) : (
+                    <p className="text-white font-semibold truncate">
+                      {row.activeItem ? (
+                        row.activeItem.name
+                      ) : (
+                        <span className="text-slate-600 italic">Not set in current rig or upgrade</span>
+                      )}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0">
+                  {row.category === 'Memory' && row.activeItem && (
+                    <div className="flex items-center gap-0.5 bg-[#111827] px-1.5 py-0.5 rounded border border-[#1f293d]">
+                      {[1, 2, 4].map((count) => {
+                        const activeCount = row.upgradeItem ? selectedRamCount : existingRamCount;
+                        return (
+                          <button
+                            key={count}
+                            type="button"
+                            onClick={() => {
+                              if (row.upgradeItem) setSelectedRamCount(count);
+                              else setExistingRamCount(count);
+                            }}
+                            className={`px-1 text-[9px] font-bold rounded ${
+                              activeCount === count ? 'bg-blue-600 text-white' : 'text-slate-400'
+                            }`}
+                          >
+                            {count}x
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <span
+                    className={`font-mono font-bold text-xs ${
+                      row.upgradeItem ? 'text-emerald-400' : 'text-slate-400'
+                    }`}
+                  >
+                    {displayPrice}
+                  </span>
+
+                  {row.upgradeItem && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBuild((prev) => ({ ...prev, [row.category]: null }))}
+                      className="text-slate-500 hover:text-red-400 font-bold text-xs"
+                      title="Remove selected upgrade"
+                    >
+                      ×
+                    </button>
+                  )}
+                  {!row.upgradeItem && row.ownedItem && (
+                    <button
+                      type="button"
+                      onClick={() => setExistingPc((prev) => ({ ...prev, [row.category]: null }))}
+                      className="text-slate-500 hover:text-red-400 font-bold text-xs"
+                      title="Clear owned part"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="pt-2.5 border-t border-[#1f293d] space-y-2">
+          <div className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d] space-y-1.5 print:hidden">
+            <div className="flex items-center justify-between gap-1">
+              <div className="flex items-center gap-1">
+                {['idle', 'load'].map((view) => (
+                  <button
+                    key={view}
+                    type="button"
+                    onClick={() => setPowerDisplayView(view)}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      powerDisplayView === view ? 'bg-blue-600 text-white' : 'text-slate-400'
+                    }`}
+                  >
+                    {view === 'idle' ? 'Idle' : 'Peak Load'}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-1">
+                {[false, true].map((oc) => (
+                  <button
+                    key={String(oc)}
+                    type="button"
+                    onClick={() => setOverclockEnabled(oc)}
+                    className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      overclockEnabled === oc ? 'bg-emerald-700 text-white' : 'text-slate-400'
+                    }`}
+                  >
+                    {oc ? 'Overclocked' : 'Stock'}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-between items-center text-[11px]">
+              <span className="text-slate-300 font-semibold">
+                {powerDisplaySummary.modeLabel}:{' '}
+                <strong className="text-white font-mono">{powerDisplaySummary.displayedWatts}W</strong>
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                Rec PSU: {powerDisplaySummary.recommendedPsuWatts ? `${powerDisplaySummary.recommendedPsuWatts}W` : '--'}
+              </span>
+            </div>
+            <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className={`h-full ${powerDisplaySummary.isOverPsuCap ? 'bg-red-500' : 'bg-blue-500'}`}
+                style={{ width: `${powerDisplaySummary.loadPercent}%` }}
+              />
+            </div>
+          </div>
+
+          <label className="flex items-start gap-2 text-[10px] text-slate-400 cursor-pointer print:hidden">
+            <input
+              type="checkbox"
+              checked={quoteConsentChecked}
+              onChange={(e) => setQuoteConsentChecked(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              I agree to the{' '}
+              <button
+                type="button"
+                onClick={() => setPrivacyModalOpen(true)}
+                className="text-blue-400 underline"
+              >
+                Data Privacy Notice (RA 10173)
+              </button>{' '}
+              for quotation export.
+            </span>
+          </label>
+
+          {currentUser && (
+            <label className="flex items-start gap-2 text-[10px] text-slate-400 cursor-pointer print:hidden">
+              <input
+                type="checkbox"
+                checked={saveConsentChecked}
+                onChange={(e) => setSaveConsentChecked(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>I consent to saving my upgrade configuration under my account.</span>
+            </label>
+          )}
+
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-xs text-slate-400 font-bold leading-none">Upgrade Cost Total</p>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                Owned parts marked as Owned · New/swap upgrades summed (PHP)
+              </p>
+            </div>
+            <p className="text-lg font-black text-emerald-400 font-mono">{peso(totalPrice)}</p>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderNextUpgradeNotesCard = () => (
+    <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left space-y-2.5">
+      <div>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">
+          Upgrade Roadmap & Guidance
+        </span>
+        <h4 className="text-sm font-bold text-white">What to Upgrade Next</h4>
+      </div>
+      <div className="space-y-2">
+        {nextUpgradeNotes.map((note, idx) => (
+          <div
+            key={`upg-note-${idx}`}
+            className="p-2.5 rounded bg-[#0b0f19] border border-[#1f293d] text-xs space-y-1"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="font-bold text-white">{note.title}</p>
+              <span
+                className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${
+                  note.priority === 'high'
+                    ? 'bg-red-950 text-red-300 border border-red-800/50'
+                    : note.priority === 'medium'
+                    ? 'bg-amber-950 text-amber-300 border border-amber-700/50'
+                    : 'bg-blue-950 text-blue-300 border border-blue-800/50'
+                }`}
+              >
+                {note.priority}
+              </span>
+            </div>
+            <p className="text-slate-300 text-[11px]">{note.detail}</p>
+            <p className="text-blue-400 text-[11px] font-semibold">Next step: {note.action}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
   const renderRecommendationPanel = () => {
     const diagBadge = isBuildIncomplete
-      ? 'Build incomplete'
+      ? activePage === 'upgrade'
+        ? 'Rig incomplete'
+        : 'Build incomplete'
       : recommendation.title || 'Verified';
 
     return (
@@ -2484,7 +2951,7 @@ export default function App() {
           {actionableIssues.length === 0 ? (
             <p className="text-xs text-slate-400 leading-relaxed whitespace-pre-line">
               {isBuildIncomplete
-                ? 'Build is incomplete; assign all required core components (including PSU) before treating compatibility as complete.'
+                ? 'Rig is incomplete; select or add missing core components (including PSU) so full compatibility and power headroom can be verified.'
                 : recommendation.summary}
             </p>
           ) : (
@@ -2566,7 +3033,7 @@ export default function App() {
         <div className="bg-[#0b0f19] border-t border-[#1f293d] rounded-t-2xl max-h-[85vh] flex flex-col">
           <div className="p-3.5 px-4 bg-[#111827] border-b border-[#1f293d] flex items-center justify-between">
             <h3 className="text-sm font-black text-white">
-              System Build ({selectedItems.length}/{CATEGORIES.length}) · {drawerScoreLabel}
+              {activePage === 'upgrade' ? 'Upgrade Rig & Diagnostics' : `System Build (${selectedItems.length}/${CATEGORIES.length})`} · {drawerScoreLabel}
             </h3>
             <button
               type="button"
@@ -2577,7 +3044,14 @@ export default function App() {
             </button>
           </div>
           <div className="p-4 overflow-y-auto space-y-4">
-            {renderBuildSummary(false)}
+            {activePage === 'upgrade' ? (
+              <>
+                {renderUnifiedUpgradeListCard(false)}
+                {renderNextUpgradeNotesCard()}
+              </>
+            ) : (
+              renderBuildSummary(false)
+            )}
             {renderRecommendationPanel()}
           </div>
         </div>
@@ -2779,71 +3253,103 @@ export default function App() {
     );
   };
 
-  const renderUpgradePage = () => (
-    <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      <div className="lg:col-span-8 space-y-4">
-        <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-2.5 flex flex-wrap gap-2 items-center">
-          <button
-            onClick={() => setUpgradeMode('reference')}
-            className={`flex-1 py-2 px-3 rounded text-xs font-bold ${
-              upgradeMode === 'reference' ? 'bg-blue-600 text-white' : 'bg-[#0b0f19] text-slate-400'
-            }`}
-          >
-            1. Select Current Hardware
-          </button>
-          <button
-            onClick={() => setUpgradeMode('shop')}
-            className={`flex-1 py-2 px-3 rounded text-xs font-bold ${
-              upgradeMode === 'shop' ? 'bg-blue-600 text-white' : 'bg-[#0b0f19] text-slate-400'
-            }`}
-          >
-            2. Choose Shop Upgrades
-          </button>
-          <button
-            type="button"
-            onClick={() => setCustomModalOpen(true)}
-            className="py-2 px-3 rounded bg-amber-600/20 border border-amber-500/40 text-amber-300 text-xs font-bold"
-          >
-            + Custom Owned Part
-          </button>
-        </div>
-        {renderRationaleAndCompareCards()}
-        {renderCategoryNavStrip()}
-        {renderCatalogList(activeTab)}
+  const renderUpgradePage = () => {
+    const focusScoreLabel =
+      compatibilityScore === null
+        ? 'Not enough data'
+        : `Score ${compatibilityScore}% (${verificationCoverage.verified}/${verificationCoverage.total} verified)`;
+
+    const upgradeModeBar = (
+      <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-2.5 flex flex-wrap gap-2 items-center print:hidden">
+        <button
+          type="button"
+          onClick={() => setUpgradeMode('reference')}
+          className={`flex-1 py-2 px-3 rounded text-xs font-bold ${
+            upgradeMode === 'reference' ? 'bg-blue-600 text-white' : 'bg-[#0b0f19] text-slate-400'
+          }`}
+        >
+          1. Select Current Hardware
+        </button>
+        <button
+          type="button"
+          onClick={() => setUpgradeMode('shop')}
+          className={`flex-1 py-2 px-3 rounded text-xs font-bold ${
+            upgradeMode === 'shop' ? 'bg-blue-600 text-white' : 'bg-[#0b0f19] text-slate-400'
+          }`}
+        >
+          2. Choose Shop Upgrades
+        </button>
+        <button
+          type="button"
+          onClick={() => setCustomModalOpen(true)}
+          className="py-2 px-3 rounded bg-amber-600/20 border border-amber-500/40 text-amber-300 text-xs font-bold"
+        >
+          + Custom Owned Part
+        </button>
       </div>
-      <aside className="hidden lg:block lg:col-span-4 space-y-2.5 lg:sticky lg:top-20 lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto pr-1">
-        <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 text-left">
-          <div className="flex justify-between items-center mb-2 pb-1.5 border-b border-[#1f293d]">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400">Your Current Rig</h4>
-            <button onClick={handleClearExistingPc} className="text-[11px] text-slate-500 hover:text-white">
-              Reset
-            </button>
-          </div>
-          <div className="space-y-1">
-            {CATEGORIES.map((cat) => (
-              <div key={cat} className="p-1.5 rounded bg-[#0b0f19] border border-[#1f293d] text-xs flex justify-between items-center gap-2">
-                <span className="text-slate-500 text-[10px]">{getCategoryLabel(cat)}</span>
-                <span className="text-white font-semibold truncate max-w-[160px]">
-                  {existingPc[cat]?.name || 'Not set'}
+    );
+
+    if (upgradeFocused) {
+      return (
+        <section id="upgrade-focus" ref={focusViewRef} className="max-w-5xl mx-auto space-y-5">
+          <div className="bg-[#111827] border border-blue-500/40 rounded-lg p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 print:hidden">
+            <div className="text-left">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 block">
+                Upgrade Focus Mode
+              </span>
+              <h2 className="text-sm font-black text-white">
+                {effectiveItems.length}/{CATEGORIES.length} Rig Slots Configured · {focusScoreLabel} · Upgrade Total: {peso(totalPrice)}
+              </h2>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {isBuildIncomplete && (
+                <span className="text-[10px] px-2.5 py-1 rounded bg-amber-950 text-amber-300 font-bold">
+                  {incompleteBadgeText}
                 </span>
-                {cat === 'Memory' && existingPc[cat] && (
-                  <button
-                    type="button"
-                    onClick={() => setExistingRamCount((c) => (c === 2 ? 1 : 2))}
-                    className="px-1.5 py-0.5 rounded bg-blue-600 text-white text-[9px] font-mono"
-                  >
-                    {existingRamCount}x
-                  </button>
-                )}
-              </div>
-            ))}
+              )}
+              {hasAnyUnverifiedPart && (
+                <span className="text-[10px] px-2.5 py-1 rounded bg-amber-950 text-amber-300 font-bold">
+                  unverified
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setUpgradeFocused(false)}
+                className="px-3.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold uppercase"
+              >
+                Expand Parts Catalog / Edit Rig
+              </button>
+            </div>
           </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            <div className="lg:col-span-6 space-y-4">
+              {renderUnifiedUpgradeListCard(false)}
+              <div className="print:hidden">{renderNextUpgradeNotesCard()}</div>
+            </div>
+            <div className="lg:col-span-6 print:hidden">{renderRecommendationPanel()}</div>
+          </div>
+
+          <div className="print:hidden">{renderRationaleAndCompareCards()}</div>
+        </section>
+      );
+    }
+
+    return (
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <div className="lg:col-span-8 space-y-4">
+          {upgradeModeBar}
+          {renderCategoryNavStrip()}
+          {renderCatalogList(activeTab)}
         </div>
-        {renderBuildSummary(false)}
-        {renderRecommendationPanel()}
-      </aside>
-    </section>
-  );
+        <aside className="hidden lg:block lg:col-span-4 space-y-2.5 lg:sticky lg:top-20 lg:max-h-[calc(100vh-5.5rem)] lg:overflow-y-auto pr-1">
+          {renderUnifiedUpgradeListCard(true)}
+          {renderNextUpgradeNotesCard()}
+          {renderRecommendationPanel()}
+        </aside>
+      </section>
+    );
+  };
 
   const renderOcrLabPanel = () => (
     <div className="bg-[#111827] border border-[#1f293d] rounded-lg p-4 space-y-3 text-xs">
